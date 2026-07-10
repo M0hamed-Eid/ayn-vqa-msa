@@ -1,0 +1,34 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment / secrets (never commit real .env, only .env.example)
+.env
+.env.*
+!.env.example
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+htmlcov/
+.coverage
+.coverage.*
+
+# Generated audit artifacts (regenerate with `uv run aynvqa-audit`)
+reports/*
+!reports/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
