@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 aynvqa-audit = "ayn_vqa.audit.run_audit:main"
+aynvqa-predict = "ayn_vqa.run_baseline:main"
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
@@ -28,6 +29,9 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+# Vendored, unmodified upstream code (see scorer_official/README.md) --
+# not ours to reformat or fix lint findings in.
+extend-exclude = ["scorer_official"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N"]
