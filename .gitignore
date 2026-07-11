@@ -27,6 +27,11 @@ htmlcov/
 reports/*
 !reports/.gitkeep
 
+# Cached stage outputs (ASR transcripts, later: parsed transcripts, VLM
+# answers, ...) -- regenerate with `uv run aynvqa-transcribe` etc.
+artifacts/*
+!artifacts/.gitkeep
+
 # Editors / OS
 .vscode/
 .idea/

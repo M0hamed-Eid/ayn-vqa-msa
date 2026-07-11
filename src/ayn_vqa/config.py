@@ -36,16 +36,34 @@ class Settings(BaseSettings):
 
     data_root: Path = Path("../AynVQA-ArabicNLP26")
     reports_dir: Path = Path("reports")
+    artifacts_dir: Path = Path("artifacts")
     random_seed: int = 42
     sample_grid_n: int = 24
     near_dup_max_distance: int = 4
     log_level: str = "INFO"
+
+    # ASR (M2). `whisper_*` runs locally, no key needed. `fanar_*`/`openai_*`
+    # are read here but only used if you set the matching API key -- see
+    # docs/M2_ASR_BENCH.md for which backends are actually exercised so far.
+    asr_sample_n: int = 50
+    whisper_model_size: str = "small"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    fanar_api_key: str | None = None
+    fanar_base_url: str = "https://api.fanar.qa/v1"
+    fanar_stt_model: str = "Fanar-Aura-STT-1"
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_transcribe_model: str = "gpt-4o-transcribe"
 
     def resolved_data_root(self) -> Path:
         return self._resolve(self.data_root)
 
     def resolved_reports_dir(self) -> Path:
         return self._resolve(self.reports_dir)
+
+    def resolved_artifacts_dir(self) -> Path:
+        return self._resolve(self.artifacts_dir)
 
     @staticmethod
     def _resolve(path: Path) -> Path:

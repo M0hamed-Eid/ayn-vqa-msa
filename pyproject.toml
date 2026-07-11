@@ -8,6 +8,8 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "faster-whisper>=1.2.1",
+    "httpx>=0.28.1",
     "matplotlib>=3.11.0",
     "pandas>=3.0.3",
     "pillow>=12.3.0",
@@ -21,6 +23,7 @@ dependencies = [
 [project.scripts]
 aynvqa-audit = "ayn_vqa.audit.run_audit:main"
 aynvqa-predict = "ayn_vqa.run_baseline:main"
+aynvqa-transcribe = "ayn_vqa.run_asr_bench:main"
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
@@ -44,7 +47,7 @@ warn_unused_ignores = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["soundfile.*"]
+module = ["soundfile.*", "faster_whisper.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
