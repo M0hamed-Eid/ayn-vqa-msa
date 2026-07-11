@@ -24,6 +24,7 @@ dependencies = [
 aynvqa-audit = "ayn_vqa.audit.run_audit:main"
 aynvqa-predict = "ayn_vqa.run_baseline:main"
 aynvqa-transcribe = "ayn_vqa.run_asr_bench:main"
+aynvqa-run = "ayn_vqa.run_pipeline:main"
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]

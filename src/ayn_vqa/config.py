@@ -46,7 +46,10 @@ class Settings(BaseSettings):
     # are read here but only used if you set the matching API key -- see
     # docs/M2_ASR_BENCH.md for which backends are actually exercised so far.
     asr_sample_n: int = 50
-    whisper_model_size: str = "small"
+    # "medium" per M2's own bench: more consistent punctuation and a higher
+    # "options are" marker-match rate than "small", at ~1.9x the latency --
+    # see docs/M2_ASR_BENCH.md for the numbers behind this default.
+    whisper_model_size: str = "medium"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     fanar_api_key: str | None = None
@@ -55,6 +58,13 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_transcribe_model: str = "gpt-4o-transcribe"
+
+    # M3: local VLM (Qwen2.5-VL via Ollama) for both transcript parsing and
+    # joint-MCQ image answering. No API key -- Ollama serves it locally.
+    pipeline_sample_n: int | None = None  # None = the whole split
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_parse_model: str = "qwen2.5vl:7b"
+    ollama_select_model: str = "qwen2.5vl:7b"
 
     def resolved_data_root(self) -> Path:
         return self._resolve(self.data_root)
