@@ -77,6 +77,21 @@ class Settings(BaseSettings):
     repair_whisper_device: str = "cuda"
     repair_whisper_compute_type: str = "float16"
 
+    # M5: chain-of-thought select prompt. Off by default -- a 43-item pilot
+    # looked promising but this hasn't been validated at full scale yet
+    # (see docs/M5_FEWSHOT_RETRIEVAL.md); flip with `--cot-enabled` for an
+    # ablation run once it has been.
+    cot_enabled: bool = False
+
+    # M5: few-shot exemplar retrieval from `train`. Off by default, same
+    # reason as `cot_enabled` -- unvalidated at full scale. `fewshot_k`
+    # exemplars are retrieved per query; `fewshot_num_ctx` raises Ollama's
+    # context window for those calls only (its own 4096 default 400s on
+    # more than one image -- see docs/M5_FEWSHOT_RETRIEVAL.md).
+    fewshot_enabled: bool = False
+    fewshot_k: int = 2
+    fewshot_num_ctx: int = 16384
+
     def resolved_data_root(self) -> Path:
         return self._resolve(self.data_root)
 

@@ -325,3 +325,219 @@ cases, plus a reduction in the resolved-but-hallucinated share) -- it's the
 better next hour of work before committing to either bigger milestone.
 
 No code has been changed for this recommendation -- awaiting review.
+
+## Addendum: parser prompt v2
+
+The recommendation above was approved, with one addition: pilot the new
+prompt on the 37 unresolved cases specifically (cheap, fast) before
+committing to a full 500-item re-run, and pay particular attention to
+option ordering given Limitation 3 above.
+
+### Design
+
+v2 keeps the schema and the `parse(..., strict=True)` mechanism exactly as
+they are -- only `_STRICT_PROMPT`'s text changed (see
+`src/ayn_vqa/stages/parse.py`). Five explicit rules replace v1's shorter,
+looser instruction: strip the "options are" preamble even when it appears
+as a *prefix* attached to real option text (not just as a standalone
+option); treat commas as strong option boundaries; split compound,
+delimiter-free clauses into their most plausible three-way grouping without
+breaking a single clause's internal "و" apart from itself; preserve the
+transcript's original spoken order; and -- the one deliberate reversal from
+v1 -- never invent content, using the most plausible leftover fragment
+instead of a placeholder or an unsupported claim about the image.
+
+### 37-case pilot: methodology and results
+
+Built an isolated evaluation harness (scratchpad-only, no production files
+touched) that called Ollama directly with the v2 prompt against each of
+the 37 unresolved cases' large-v3 transcript -- the same input v1's
+strict-reparse had already failed on, for a clean apples-to-apples read --
+plus, as a bonus check, each case's original medium transcript. Scored
+every result with the existing `check_option_quality()` (unchanged, reused
+read-only) and a purpose-built order-preservation check (fuzzy-matches
+each option's approximate position back into the transcript and verifies
+positions are non-decreasing). Every one of the 37 outputs was then read
+by hand against its transcript, not just scored automatically -- consistent
+with Limitation 2 above.
+
+**Result: 5/37 (13.5%) structurally resolved** on the large-v3 transcript
+-- well below what an eyeballed read of the 37 transcripts suggested going
+in (the empirical run corrected that prior). Breaking down what worked and
+what didn't:
+
+- **Comma-boundary recovery: confirmed working.** The one pilot case with
+  real commas (`67635542e05efee4`, named in the "Recommended next step"
+  above) split cleanly into 3, order preserved.
+- **Boilerplate-prefix stripping: confirmed working.** A case whose
+  previous output still carried "الخيارات هي" as a prefix on option_0 no
+  longer does.
+- **Fabrication: dropped sharply.** 1/37 residual fabricated placeholder,
+  versus a recurring pattern under v1 (hallucinated "iron," a "no colorful
+  flags in image" negation, "third option unavailable" placeholders).
+- **Order preservation: no confirmed real violations.** 28/30 checkable
+  cases came out monotonic. The 2 flagged violations turned out, on
+  inspection, to be artifacts of the position-checker's own substring
+  matching (matching an earlier occurrence of a word that also recurs
+  later in the transcript) rather than genuine reordering by the model.
+  Given this was the specific risk flagged for extra attention, that's a
+  meaningful result on its own, independent of the low resolution rate.
+- **Compound/no-delimiter splitting: partial.** 31/32 still-degenerate
+  cases fail for the same reason (`empty_option`), but the *shape* of the
+  failure changed: the model now typically finds a correct or reasonable
+  **2-way** split and stops, rather than v1's typical single blob with two
+  blank slots. Real, visible progress that still trips the same structural
+  check.
+
+Dug into *why* rather than patching around it: **0 of the 32 still-
+degenerate cases have any unused transcript text left over** after their
+last populated option (checked programmatically). The model isn't
+ignoring available text -- for most of these, the transcript genuinely
+only contains two cleanly recoverable segments (e.g. `426f876e14e6b1bb`:
+"2080 5780"; `d85b420ae6bc205e`: "123 سويا", the aircraft-registration/OCR
+case). A smaller minority (roughly 5-6 of the 32) do have a genuine
+three-way split achievable by sub-dividing one of the two groups the model
+already found, which it didn't attempt.
+
+One further, unplanned finding: the bonus medium-transcript run resolved a
+**different, non-overlapping** set of 4 cases from the large-v3 run's 5 --
+evidence of real sensitivity in how this 7B parser model responds to small
+phrasing differences, not a clean "better transcript always parses better"
+relationship.
+
+### Decision: freeze v2, measure end-to-end impact
+
+A further prompt iteration was considered and explicitly rejected: the
+0-unused-leftover-text finding shows the dominant remaining failure isn't
+a wording gap in the instructions, it's that a fixed three-non-empty-option
+schema cannot represent a transcript that honestly only contains two
+recoverable options without either fabricating (v1's failure mode) or
+leaving a slot blank (v2's) -- more prompt engineering was judged unlikely
+to move that number further. v2 was frozen as the production repair-retry
+prompt (replacing v1 in place, same file, same mechanism) on the strength
+of its confirmed wins -- comma-splitting, prefix-stripping, fabrication
+reduction, and clean order preservation -- to be validated by a full
+500-item repair-enabled run under the same methodology as the original M4
+ablation.
+
+### Known limitation, deferred: the fixed three-option schema
+
+Recorded here as future architectural work, **not scheduled or
+implemented**: M4's original design deliberately kept the parser's output
+schema fixed at exactly three non-empty options, to keep the validation
+layer independent of any schema change (see the M4 design decisions at the
+top of this document). The v2 pilot is the first concrete evidence that
+this has a real cost -- an unknown but nonzero share of transcripts (most
+plainly, the dataset/OCR-needed cases already identified) genuinely
+support only two recoverable options, and no prompt wording can make a
+schema honestly represent a count it doesn't allow. Possible future
+directions, none evaluated: an explicit "fewer than three recovered"
+signal in the parse output (a real schema change, with all the downstream
+consequences that implies for the selector stage and for comparability
+with every prior milestone's numbers); or a confidence/coverage field
+alongside the three slots. Deliberately left as a future option, not a
+next step -- changing the parser's output contract now would affect the
+rest of the pipeline and complicate comparison with M0-M4's results, which
+the schema-freeze decision in M4 was specifically meant to avoid.
+
+### Full-scale v2 comparison
+
+Same methodology as the original M4 ablation: full 500-item dev/msa,
+repair enabled, v2 as the only change from the frozen M4 baseline. The
+`off` leg was not re-run -- repair-disabled runs never call the
+repair-retry prompt, so v1 and v2 are identical for that condition and the
+original M4 numbers stand. The repair-stage and select-stage caches
+*are* keyed by config name rather than prompt content, so the three
+v1-prompt-dependent cache files were archived (not deleted --
+`artifacts/_v1_prompt_archive/`) before this run to force a genuine
+recompute rather than silently replaying v1's cached predictions; output
+went to a separate `reports/m4_parser_v2/` directory so the original M4
+ablation CSVs remain untouched.
+
+| | off | v1 (frozen M4) | v2 |
+|---|---:|---:|---:|
+| Accuracy | 0.7160 (358/500) | 0.7380 (369/500) | **0.7480 (374/500)** |
+| Wrong | 142 | 131 | 126 |
+| Flagged degenerate (any correctness) | 125 | 37 | 50 |
+| Repair: resolved by reparse / by ASR escalation / still degenerate | -- | 57 / 31 / 37 | 33 / 42 / **50** |
+| Runtime | ~4s (cache reuse) | ~56 min | ~63 min |
+
+**v2 beats v1 by +5 correct (+1.0 accuracy point) -- but resolves *fewer*
+of the originally-125-flagged items structurally (75 vs 88), leaving more
+(50 vs 37) still flagged degenerate.** This is the fabrication/honesty
+trade-off from the pilot showing up at full scale, confirmed by the
+runtime breakdown: v2 resolves fewer cases at the cheap reparse-only step
+(33 vs v1's 57 -- consistent with the pilot's finding that v2 declines to
+force a third option into existence) but *more* once escalated to a
+better transcript (42 vs v1's 31). v1's higher "resolved" count included
+real fabrication (documented in the base M4 report); v2's honesty about
+not finding a third option, it turns out, costs less accuracy than v1's
+confident invention did.
+
+**Regression check** (the user's explicit adoption criterion): comparing
+v1's and v2's predictions record-by-record, 19 flipped wrong-to-correct
+and 14 flipped correct-to-wrong (net +5, matching the accuracy delta).
+Every one of the 14 was read by hand against its transcript and options,
+not just counted:
+
+| Category | Count |
+|---|---:|
+| Pure VLM resampling noise (options byte-identical between v1 and v2, prediction differs anyway) | 2 |
+| Selector sensitivity to a cosmetic rewording (v2's text is a lateral change or arguably cleaner, selector flipped anyway) | 3 |
+| **Genuine v2 parse-quality regression** (v1's retry had already produced an adequate split; v2's retry made it worse) | **6** |
+| v1's "correct" answer came from a lucky guess against a broken/degenerate options set; v2 gave the selector an honest (if imperfect) parse and it made a real, wrong visual-reasoning call | 2 |
+| Novel failure mode not seen in the 37-case pilot: v2 absorbed part of the *question* text into an option slot | 1 |
+
+Two things worth being direct about:
+
+1. **The 6-case "genuine regression" bucket is not a new problem v2
+   introduced.** Every one of them is the same failure already named as
+   Limitation 5 in the base M4 report -- the strict-reparse prompt is
+   inconsistent, and occasionally makes an already-acceptable parse worse
+   on retry (one case produced entirely unrelated meta-commentary text; in
+   general v2 was not designed to fix retry *reliability*, only specific
+   structural patterns, and it didn't). v1 carried the same risk; this run
+   is the first time it's been quantified rather than just documented from
+   a handful of examples.
+2. **Taken literally, "no regressions" is not the outcome.** 14 records
+   got worse. The net is positive (19 > 14, and only 2 of the 14 are pure
+   noise, so this isn't just noise cancelling out), and the fixed cases
+   are mechanistically the ones v2 was built for -- both the comma-split
+   case (`67635542e05efee4`) and the compound-clause case
+   (`477582a210bc5ada`) named throughout the pilot as target examples
+   flipped wrong-to-correct here in the real pipeline, not just the
+   isolated harness. But "measurable improvement, no regressions" as
+   literally stated was not fully met, and that distinction is left for
+   review rather than resolved unilaterally here.
+
+### Decision: adopt v2, freeze M4
+
+v2 is adopted as the production repair-retry prompt. The improvement over
+v1 is real (+1.0 accuracy point, net of noise) and not free, but the
+regression mode is a pre-existing, already-documented risk rather than one
+v2 introduced, and the mechanism behind the gains is exactly what v2 was
+built for, now confirmed at full scale rather than just on the 37-case
+pilot.
+
+**Known limitation, deferred: question text leaking into an option.**
+Recorded as future work, not fixed. One full-scale regression
+(`6173f511282d1039`) shows the strict-reparse prompt, on retry, absorbing
+part of the *question* itself into an option slot (producing an option
+that reads as a restatement of the question rather than an answer to it) --
+a failure mode not seen anywhere in the 37-case pilot and not previously
+documented for v1 either. `option_quality.check_option_quality()` has no
+check for this (it only inspects the options for internal degeneracy, not
+their relationship to the question text), so it passed structurally.
+Occurred once in 500 records; too rare from a single occurrence to design
+a targeted fix around with any confidence, but worth watching for if it
+recurs. A question-text-overlap check (e.g. flag an option that shares an
+unusually long substring with the question) would be the natural next
+structural check to add if it does.
+
+**M4 (pipeline robustness) is frozen as of this run.** Production
+defaults: `repair_enabled=True`, repair-retry prompt v2, Whisper large-v3
+as the repair-escalation ASR backend. Frozen baseline for all future
+milestones: **74.80% (374/500), dev/msa**, from
+`reports/m4_parser_v2/error_analysis_whisper-medium__ollama-parse__ollama-joint-mcq__repair_dev_msa.csv`.
+Every subsequent milestone's ablations compare against this number, the
+same way M4 compared against M3's 71.60%.

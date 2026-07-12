@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from ayn_vqa.ollama_client import OllamaClient
+from ayn_vqa.ollama_client import ChatMessage, OllamaClient
 
 
 def test_chat_sends_text_only_request_and_returns_content() -> None:
@@ -74,3 +74,70 @@ def test_chat_includes_json_schema_format_when_given() -> None:
     body = captured["body"]
     assert isinstance(body, dict)
     assert body["format"] == schema
+
+
+def test_chat_omits_num_ctx_by_default() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ollama = OllamaClient(client=client)
+
+    ollama.chat("model", "prompt")
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert "num_ctx" not in body["options"]
+
+
+def test_chat_sends_num_ctx_when_given() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ollama = OllamaClient(client=client)
+
+    ollama.chat("model", "prompt", num_ctx=16384)
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["options"]["num_ctx"] == 16384
+
+
+def test_chat_messages_sends_a_multi_turn_conversation(tmp_path: Path) -> None:
+    exemplar_image = tmp_path / "exemplar.jpg"
+    exemplar_image.write_bytes(b"exemplar bytes")
+    query_image = tmp_path / "query.jpg"
+    query_image.write_bytes(b"query bytes")
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"message": {"content": "2"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ollama = OllamaClient(client=client)
+
+    messages = [
+        ChatMessage(role="user", content="example question", image_path=exemplar_image),
+        ChatMessage(role="assistant", content="example answer"),
+        ChatMessage(role="user", content="real question", image_path=query_image),
+    ]
+    result = ollama.chat_messages("model", messages)
+
+    assert result == "2"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert len(body["messages"]) == 3
+    assert body["messages"][0]["content"] == "example question"
+    assert "images" in body["messages"][0]
+    assert body["messages"][1]["role"] == "assistant"
+    assert "images" not in body["messages"][1]
+    assert body["messages"][2]["content"] == "real question"
+    assert "images" in body["messages"][2]

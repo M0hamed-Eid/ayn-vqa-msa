@@ -36,6 +36,7 @@ from ayn_vqa.logging_utils import setup_logging
 from ayn_vqa.option_quality import check_option_quality
 from ayn_vqa.stages.asr import ASRBackend, Transcript, WhisperLocalASR
 from ayn_vqa.stages.parse import OllamaTranscriptParser, ParsedTranscript, TranscriptParser
+from ayn_vqa.stages.retrieve import Exemplar, ExemplarRetriever, OllamaCategoryRetriever
 from ayn_vqa.stages.select import Prediction
 from ayn_vqa.stages.select_vlm import FALLBACK_INDEX, OllamaJointMCQSelector, VLMSelector
 from ayn_vqa.submission import check_submission_format, write_predictions_csv
@@ -236,6 +237,68 @@ def _run_repair_stage(
     )
 
 
+def _run_retrieval_stage(
+    records: list[Task1aRecord],
+    retriever: ExemplarRetriever,
+    train_records: list[Task1aRecord],
+    data_root: Path,
+    artifacts_dir: Path,
+    language: Language,
+    asr_backend: ASRBackend,
+    asr_config_key: str,
+    parser: TranscriptParser,
+    parser_config_key: str,
+) -> dict[str, tuple[Exemplar, ...]]:
+    """M5 few-shot: which train records to show as worked examples for
+    each query, then hydrate each into a full `Exemplar` (question/options
+    text + its ground-truth answer).
+
+    Hydration reuses `_run_asr_stage`/`_run_parse_stage` completely
+    unmodified, just pointed at `train`'s own cache namespace instead of
+    the query split's -- the same trick M4's repair ladder uses to reuse
+    those two functions rather than duplicating their caching logic. Only
+    the train records actually retrieved by at least one query get
+    transcribed/parsed, not all of `train`.
+    """
+    train_by_id = {record.id: record for record in train_records}
+
+    retrieved_ids: dict[str, tuple[str, ...]] = {}
+    all_exemplar_ids: set[str] = set()
+    for record in records:
+        ids = retriever.retrieve(record.id, record.image_path(data_root))
+        retrieved_ids[record.id] = ids
+        all_exemplar_ids.update(ids)
+
+    exemplar_records = [train_by_id[eid] for eid in all_exemplar_ids if eid in train_by_id]
+
+    exemplar_transcripts = _run_asr_stage(
+        exemplar_records, data_root, artifacts_dir, Split.TRAIN, language,
+        asr_backend, asr_config_key,
+    )
+    exemplar_parses = _run_parse_stage(
+        exemplar_records, exemplar_transcripts, artifacts_dir, Split.TRAIN, language,
+        parser, parser_config_key,
+    )
+
+    hydrated: dict[str, Exemplar] = {}
+    for record in exemplar_records:
+        parsed = exemplar_parses[record.id]
+        if not parsed.ok or parsed.options is None or record.label is None:
+            continue  # skip a failed/unusable exemplar rather than show a broken one
+        hydrated[record.id] = Exemplar(
+            record_id=record.id,
+            image_path=record.image_path(data_root),
+            question=parsed.question or "",
+            options=parsed.options,
+            correct_option_text=parsed.options[record.label],
+        )
+
+    return {
+        record.id: tuple(hydrated[eid] for eid in retrieved_ids[record.id] if eid in hydrated)
+        for record in records
+    }
+
+
 def _run_select_stage(
     records: list[Task1aRecord],
     parses: dict[str, ParsedTranscript],
@@ -245,6 +308,7 @@ def _run_select_stage(
     language: Language,
     selector: VLMSelector,
     config_key: str,
+    exemplars_by_record: dict[str, tuple[Exemplar, ...]] | None = None,
 ) -> dict[str, Prediction]:
     cache_path = artifact_path(
         artifacts_dir, split.value, "select", f"{language.value}_{config_key}"
@@ -261,8 +325,13 @@ def _run_select_stage(
         if record.id in cache:
             predictions[record.id] = Prediction(**cache[record.id])
             continue
+        exemplars = exemplars_by_record.get(record.id, ()) if exemplars_by_record else ()
         prediction = selector.predict(
-            record.id, record.image_path(data_root), parsed.question or "", parsed.options
+            record.id,
+            record.image_path(data_root),
+            parsed.question or "",
+            parsed.options,
+            exemplars,
         )
         append_jsonl(cache_path, asdict(prediction))
         predictions[record.id] = prediction
@@ -287,6 +356,10 @@ def run_pipeline(
     repair_enabled: bool = False,
     repair_asr_backend: ASRBackend | None = None,
     repair_asr_config_key: str = "no-repair-asr",
+    fewshot_enabled: bool = False,
+    fewshot_retriever: ExemplarRetriever | None = None,
+    fewshot_train_records: list[Task1aRecord] | None = None,
+    fewshot_k: int = 2,
 ) -> PipelineResult:
     split_data = load_split(data_root, split, language)
     records = (
@@ -354,6 +427,34 @@ def run_pipeline(
             parser,
         )
 
+    exemplars_by_record: dict[str, tuple[Exemplar, ...]] | None = None
+    if fewshot_enabled and fewshot_retriever is not None and fewshot_train_records is not None:
+        # Same reasoning as repair's key suffix above: fewshot changes what
+        # selection sees on a per-record basis (exemplars come from a
+        # separate retrieval stage, not a property of the selector itself,
+        # so it can't just live in `selector.name` the way CoT does), so it
+        # needs its own cache/output key too.
+        effective_selector_config_key = f"{effective_selector_config_key}__fewshot{fewshot_k}"
+        exemplars_by_record = _run_retrieval_stage(
+            records,
+            fewshot_retriever,
+            fewshot_train_records,
+            data_root,
+            artifacts_dir,
+            language,
+            asr_backend,
+            asr_config_key,
+            parser,
+            parser_config_key,
+        )
+        n_with_exemplars = sum(1 for ex in exemplars_by_record.values() if ex)
+        logger.info(
+            "Retrieval: %d/%d records got at least one exemplar (k=%d requested)",
+            n_with_exemplars,
+            len(records),
+            fewshot_k,
+        )
+
     predictions = _run_select_stage(
         records,
         parses,
@@ -363,6 +464,7 @@ def run_pipeline(
         language,
         selector,
         effective_selector_config_key,
+        exemplars_by_record,
     )
     n_fallback = sum(1 for p in predictions.values() if (p.raw or "").startswith("fallback"))
     n_select_error = sum(1 for p in predictions.values() if (p.raw or "").startswith("error"))
@@ -465,6 +567,24 @@ def _build_repair_asr_backend(settings: Settings) -> tuple[ASRBackend | None, st
     return backend, f"whisper-{settings.repair_whisper_model_size}"
 
 
+def _build_fewshot_retriever(
+    settings: Settings, data_root: Path, language: Language
+) -> tuple[ExemplarRetriever | None, list[Task1aRecord] | None]:
+    """`None, None` when fewshot is off -- mirrors `_build_repair_asr_backend`'s
+    shape so `main()` doesn't need its own branch either."""
+    if not settings.fewshot_enabled:
+        return None, None
+    train_split = load_split(data_root, Split.TRAIN, language)
+    retriever: ExemplarRetriever = OllamaCategoryRetriever(
+        train_split.records,
+        k=settings.fewshot_k,
+        seed=settings.random_seed,
+        model=settings.ollama_select_model,
+        base_url=settings.ollama_base_url,
+    )
+    return retriever, train_split.records
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="M3 cascade: ASR -> parse -> joint-MCQ VLM -> submit -> score -> errors."
@@ -499,6 +619,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override AYNVQA_REPAIR_ENABLED -- use --no-repair-enabled for an ablation run.",
     )
+    parser.add_argument(
+        "--cot-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override AYNVQA_COT_ENABLED -- use --cot-enabled for an M5 ablation run.",
+    )
+    parser.add_argument(
+        "--fewshot-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override AYNVQA_FEWSHOT_ENABLED -- use --fewshot-enabled for an M5 ablation run.",
+    )
+    parser.add_argument(
+        "--fewshot-k", type=int, default=None, help="Override AYNVQA_FEWSHOT_K."
+    )
     parser.add_argument("--log-level", default=None)
     return parser.parse_args(argv)
 
@@ -519,6 +654,12 @@ def main(argv: list[str] | None = None) -> None:
         overrides["ollama_base_url"] = args.ollama_base_url
     if args.repair_enabled is not None:
         overrides["repair_enabled"] = args.repair_enabled
+    if args.cot_enabled is not None:
+        overrides["cot_enabled"] = args.cot_enabled
+    if args.fewshot_enabled is not None:
+        overrides["fewshot_enabled"] = args.fewshot_enabled
+    if args.fewshot_k is not None:
+        overrides["fewshot_k"] = args.fewshot_k
     if overrides:
         settings = settings.model_copy(update=overrides)
 
@@ -530,11 +671,17 @@ def main(argv: list[str] | None = None) -> None:
 
     asr_backend, asr_config_key = _build_asr_backend(settings)
     repair_asr_backend, repair_asr_config_key = _build_repair_asr_backend(settings)
+    fewshot_retriever, fewshot_train_records = _build_fewshot_retriever(
+        settings, data_root, Language(args.language)
+    )
     parser_stage = OllamaTranscriptParser(
         model=settings.ollama_parse_model, base_url=settings.ollama_base_url
     )
     selector: VLMSelector = OllamaJointMCQSelector(
-        model=settings.ollama_select_model, base_url=settings.ollama_base_url
+        model=settings.ollama_select_model,
+        base_url=settings.ollama_base_url,
+        use_cot=settings.cot_enabled,
+        fewshot_num_ctx=settings.fewshot_num_ctx,
     )
 
     result = run_pipeline(
@@ -555,6 +702,10 @@ def main(argv: list[str] | None = None) -> None:
         repair_enabled=settings.repair_enabled,
         repair_asr_backend=repair_asr_backend,
         repair_asr_config_key=repair_asr_config_key,
+        fewshot_enabled=settings.fewshot_enabled,
+        fewshot_retriever=fewshot_retriever,
+        fewshot_train_records=fewshot_train_records,
+        fewshot_k=settings.fewshot_k,
     )
 
     logger.info("Prediction CSV: %s", result.prediction_csv)

@@ -12,10 +12,12 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
+from ayn_vqa.data.loader import load_split
 from ayn_vqa.data.schema import Language, Split
 from ayn_vqa.run_pipeline import RepairSummary, run_pipeline
 from ayn_vqa.stages.asr import ASRBackend, Transcript
 from ayn_vqa.stages.parse import OllamaTranscriptParser, ParsedTranscript
+from ayn_vqa.stages.retrieve import Exemplar
 from ayn_vqa.stages.select import Prediction
 
 
@@ -42,7 +44,12 @@ class _FakeSelector:
         self.calls: list[str] = []
 
     def predict(
-        self, record_id: str, image_path: Path, question: str, options: tuple[str, str, str]
+        self,
+        record_id: str,
+        image_path: Path,
+        question: str,
+        options: tuple[str, str, str],
+        exemplars: tuple[Exemplar, ...] = (),
     ) -> Prediction:
         self.calls.append(record_id)
         return Prediction(record_id, 0, None, "fake")
@@ -140,6 +147,73 @@ def test_run_pipeline_devtest_has_no_labels_and_is_not_scored(
 
     assert result.format_check_ok
     assert result.metrics is None
+
+
+class _FakeRetriever:
+    name = "fake-retriever"
+
+    def __init__(self, exemplar_ids: tuple[str, ...]) -> None:
+        self._exemplar_ids = exemplar_ids
+
+    def retrieve(self, record_id: str, image_path: Path) -> tuple[str, ...]:
+        return self._exemplar_ids
+
+
+class _ExemplarCapturingSelector:
+    name = "fake-select"
+
+    def __init__(self) -> None:
+        self.seen_exemplars: list[tuple[Exemplar, ...]] = []
+
+    def predict(
+        self,
+        record_id: str,
+        image_path: Path,
+        question: str,
+        options: tuple[str, str, str],
+        exemplars: tuple[Exemplar, ...] = (),
+    ) -> Prediction:
+        self.seen_exemplars.append(exemplars)
+        return Prediction(record_id, 0, None, "fake")
+
+
+def test_run_pipeline_fewshot_hydrates_and_passes_exemplars(
+    mini_dataset: Path, tmp_path: Path
+) -> None:
+    train_records = load_split(mini_dataset, Split.TRAIN, Language.MSA).records
+    retriever = _FakeRetriever(exemplar_ids=(train_records[0].id, train_records[1].id))
+    selector = _ExemplarCapturingSelector()
+
+    result = run_pipeline(
+        data_root=mini_dataset,
+        artifacts_dir=tmp_path / "artifacts",
+        output_dir=tmp_path / "reports",
+        experiments_md=tmp_path / "experiments.md",
+        split=Split.DEV,
+        language=Language.MSA,
+        asr_backend=_FakeASRBackend(),
+        asr_config_key="fake-asr",
+        parser=_FakeParser(),
+        parser_config_key="fake-parse",
+        selector=selector,
+        selector_config_key="fake-select",
+        sample_n=None,
+        seed=42,
+        fewshot_enabled=True,
+        fewshot_retriever=retriever,
+        fewshot_train_records=train_records,
+        fewshot_k=2,
+    )
+
+    assert len(selector.seen_exemplars) == 1  # dev fixture is a single row
+    exemplars = selector.seen_exemplars[0]
+    assert len(exemplars) == 2
+    assert {e.record_id for e in exemplars} == {train_records[0].id, train_records[1].id}
+    assert train_records[0].label is not None
+    assert exemplars[0].correct_option_text == exemplars[0].options[train_records[0].label]
+    # fewshot changes what select sees -- distinct cache/output key, same
+    # reasoning as repair's `__repair` suffix.
+    assert "__fewshot2" in result.prediction_csv.name
 
 
 _DEGENERATE_PAYLOAD = {
