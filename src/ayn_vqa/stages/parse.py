@@ -43,6 +43,34 @@ Transcript:
 
 Split it into the question and the three options, in order."""
 
+# Repair-retry variant, used only when a first parse of this same
+# transcript produced degenerate options (see `ayn_vqa.option_quality`).
+# No schema change -- still exactly {question, option_0, option_1,
+# option_2} -- just a more pointed instruction about the specific failure
+# mode hand-verified across the M3 dev error analysis: the parser
+# sometimes captures the "options are" preamble itself as if it were an
+# option, or duplicates/leaves one blank when it can't cleanly find three.
+_STRICT_PROMPT = """The following is a speech-to-text transcript of a spoken \
+Arabic multiple-choice question. A previous attempt at parsing this exact \
+transcript produced a degenerate result -- an option that was empty, a \
+duplicate of another option, or leftover phrasing like "الخيارات هي" \
+("the options are") captured as if it were an option itself rather than \
+genuine answer text. Look again, more carefully:
+
+- The phrase "الخيارات هي" (or a similar variant) only ever introduces the \
+options that follow -- it is never itself an option.
+- The three options must be genuinely distinct from each other and from \
+the question.
+- If the transcript truly does not contain three clearly distinguishable \
+options, give your best-effort guess at a plausible third option based on \
+the question's subject matter, rather than repeating another option or \
+leaving one blank.
+
+Transcript:
+{transcript}
+
+Split it into the question and the three options, in order."""
+
 
 @dataclass(frozen=True)
 class ParsedTranscript:
@@ -79,11 +107,18 @@ class OllamaTranscriptParser:
         self._model = model
         self._ollama = OllamaClient(base_url=base_url, client=client)
 
-    def parse(self, record_id: str, transcript_text: str) -> ParsedTranscript:
+    def parse(
+        self, record_id: str, transcript_text: str, *, strict: bool = False
+    ) -> ParsedTranscript:
+        """`strict=True` selects the repair-retry prompt (see
+        `_STRICT_PROMPT`) instead of the normal one -- an optional,
+        defaulted keyword argument, so this still satisfies the plain
+        `TranscriptParser` Protocol every other caller uses."""
+        template = _STRICT_PROMPT if strict else _PROMPT
         try:
             content = self._ollama.chat(
                 self._model,
-                _PROMPT.format(transcript=transcript_text),
+                template.format(transcript=transcript_text),
                 json_schema=_PARSE_SCHEMA,
             )
             payload = json.loads(content)

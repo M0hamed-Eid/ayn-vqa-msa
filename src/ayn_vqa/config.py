@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     ollama_parse_model: str = "qwen2.5vl:7b"
     ollama_select_model: str = "qwen2.5vl:7b"
 
+    # M4: pipeline-robustness repair escalation. On by default, but a
+    # single flag away from an ablation run (`AYNVQA_REPAIR_ENABLED=false`
+    # or `--no-repair-enabled`) comparing with/without. `repair_whisper_*`
+    # is the stronger ASR model step 2 of the escalation ladder falls back
+    # to; float16 (not medium's int8) because this runs on GPU, where it's
+    # both faster and more accurate than a CPU-oriented quantization.
+    repair_enabled: bool = True
+    repair_whisper_model_size: str = "large-v3"
+    repair_whisper_device: str = "cuda"
+    repair_whisper_compute_type: str = "float16"
+
     def resolved_data_root(self) -> Path:
         return self._resolve(self.data_root)
 

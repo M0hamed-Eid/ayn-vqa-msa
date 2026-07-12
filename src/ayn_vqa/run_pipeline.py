@@ -29,10 +29,11 @@ from ayn_vqa.audit.sampling import sample_records
 from ayn_vqa.config import PROJECT_ROOT, Settings, get_settings
 from ayn_vqa.data.loader import load_split
 from ayn_vqa.data.schema import Language, Split, Task1aRecord
-from ayn_vqa.error_analysis import build_error_table, summarize_by
+from ayn_vqa.error_analysis import build_error_table, summarize_by, summarize_option_quality
 from ayn_vqa.evaluate import Metric, score_predictions
 from ayn_vqa.experiments import log_experiment
 from ayn_vqa.logging_utils import setup_logging
+from ayn_vqa.option_quality import check_option_quality
 from ayn_vqa.stages.asr import ASRBackend, Transcript, WhisperLocalASR
 from ayn_vqa.stages.parse import OllamaTranscriptParser, ParsedTranscript, TranscriptParser
 from ayn_vqa.stages.select import Prediction
@@ -40,6 +41,20 @@ from ayn_vqa.stages.select_vlm import FALLBACK_INDEX, OllamaJointMCQSelector, VL
 from ayn_vqa.submission import check_submission_format, write_predictions_csv
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RepairSummary:
+    """Outcome of the M4 repair-escalation ladder over one pipeline run.
+    All zero when repair is disabled or nothing was flagged -- there is
+    always a `RepairSummary` on `PipelineResult`, never `None`, so callers
+    don't need an extra branch to log it.
+    """
+
+    n_flagged: int
+    n_resolved_by_reparse: int
+    n_resolved_by_reasr: int
+    n_still_degenerate: int
 
 
 @dataclass(frozen=True)
@@ -51,6 +66,7 @@ class PipelineResult:
     n_asr_ok: int
     n_parse_ok: int
     n_records: int
+    repair_summary: RepairSummary
 
 
 def _run_asr_stage(
@@ -108,6 +124,118 @@ def _run_parse_stage(
     return parses
 
 
+class _StrictReparseAdapter:
+    """Wraps an `OllamaTranscriptParser` to always request its stricter
+    repair-retry prompt (`strict=True`), while still exposing the plain
+    `parse(record_id, transcript_text) -> ParsedTranscript` shape --
+    lets `_run_parse_stage` be reused unmodified for the repair escalation
+    ladder's retry passes below, instead of duplicating its caching logic.
+    """
+
+    def __init__(self, parser: OllamaTranscriptParser, name: str) -> None:
+        self._parser = parser
+        self.name = name
+
+    def parse(self, record_id: str, transcript_text: str) -> ParsedTranscript:
+        return self._parser.parse(record_id, transcript_text, strict=True)
+
+
+def _run_repair_stage(
+    records: list[Task1aRecord],
+    data_root: Path,
+    transcripts: dict[str, Transcript],
+    parses: dict[str, ParsedTranscript],
+    artifacts_dir: Path,
+    split: Split,
+    language: Language,
+    parser: OllamaTranscriptParser,
+    parser_config_key: str,
+    repair_asr_backend: ASRBackend | None,
+    repair_asr_config_key: str,
+) -> tuple[dict[str, ParsedTranscript], RepairSummary]:
+    """Escalation ladder for parsed items whose options are structurally
+    valid but semantically degenerate (`option_quality.check_option_quality`):
+
+    1. Re-parse the *same* transcript with a stricter prompt -- cheap, no
+       new ASR call. Fixes the parser-mis-split cases (boilerplate leaking
+       into an option, two real options merged into one slot).
+    2. If still degenerate, re-transcribe with `repair_asr_backend` (a
+       stronger ASR model) and re-parse that. Fixes the cases where the
+       transcript itself was insufficient (ASR dropped an option, or
+       hallucinated a repetition loop).
+    3. If still degenerate, give up -- the original parse is kept and the
+       item proceeds to selection exactly as it would have without repair.
+
+    Both steps reuse `_run_parse_stage`/`_run_asr_stage`'s own per-record
+    JSONL caching (via distinct config keys), so a second run with the
+    same config replays free instead of re-calling any model.
+    """
+    strict_parser = _StrictReparseAdapter(parser, f"{parser.name}-strict")
+
+    flagged: list[Task1aRecord] = []
+    for record in records:
+        parsed = parses[record.id]
+        if (
+            parsed.ok
+            and parsed.options is not None
+            and check_option_quality(parsed.options).is_degenerate
+        ):
+            flagged.append(record)
+    if not flagged:
+        return dict(parses), RepairSummary(0, 0, 0, 0)
+
+    final_parses = dict(parses)
+
+    step1 = _run_parse_stage(
+        flagged, transcripts, artifacts_dir, split, language, strict_parser,
+        f"{parser_config_key}-repair1",
+    )
+    n_resolved_by_reparse = 0
+    still_flagged: list[Task1aRecord] = []
+    for record in flagged:
+        candidate = step1[record.id]
+        if (
+            candidate.ok
+            and candidate.options is not None
+            and not check_option_quality(candidate.options).is_degenerate
+        ):
+            final_parses[record.id] = candidate
+            n_resolved_by_reparse += 1
+            continue
+        still_flagged.append(record)
+
+    n_resolved_by_reasr = 0
+    if still_flagged and repair_asr_backend is not None:
+        repair_transcripts = _run_asr_stage(
+            still_flagged, data_root, artifacts_dir, split, language,
+            repair_asr_backend, repair_asr_config_key,
+        )
+        step2 = _run_parse_stage(
+            still_flagged, repair_transcripts, artifacts_dir, split, language, strict_parser,
+            f"{parser_config_key}-repair2",
+        )
+        remaining: list[Task1aRecord] = []
+        for record in still_flagged:
+            candidate = step2[record.id]
+            if (
+                candidate.ok
+                and candidate.options is not None
+                and not check_option_quality(candidate.options).is_degenerate
+            ):
+                final_parses[record.id] = candidate
+                n_resolved_by_reasr += 1
+                continue
+            remaining.append(record)
+        still_flagged = remaining
+
+    return final_parses, RepairSummary(
+        n_flagged=len(flagged),
+        n_resolved_by_reparse=n_resolved_by_reparse,
+        n_resolved_by_reasr=n_resolved_by_reasr,
+        n_still_degenerate=len(still_flagged),
+    )
+
+
 def _run_select_stage(
     records: list[Task1aRecord],
     parses: dict[str, ParsedTranscript],
@@ -156,6 +284,9 @@ def run_pipeline(
     selector_config_key: str,
     sample_n: int | None,
     seed: int,
+    repair_enabled: bool = False,
+    repair_asr_backend: ASRBackend | None = None,
+    repair_asr_config_key: str = "no-repair-asr",
 ) -> PipelineResult:
     split_data = load_split(data_root, split, language)
     records = (
@@ -183,21 +314,68 @@ def run_pipeline(
     n_parse_ok = sum(1 for p in parses.values() if p.ok)
     logger.info("Parse (%s): %d/%d succeeded", parser_config_key, n_parse_ok, len(records))
 
+    repair_summary = RepairSummary(0, 0, 0, 0)
+    effective_selector_config_key = selector_config_key
+    if repair_enabled and isinstance(parser, OllamaTranscriptParser):
+        # A distinct cache/output key once repair changes what selection
+        # sees -- without this, a with-repair and without-repair run would
+        # collide on the same select-stage cache and silently serve each
+        # other's (wrong-condition) predictions on a second run.
+        effective_selector_config_key = f"{selector_config_key}__repair"
+        parses, repair_summary = _run_repair_stage(
+            records,
+            data_root,
+            transcripts,
+            parses,
+            artifacts_dir,
+            split,
+            language,
+            parser,
+            parser_config_key,
+            repair_asr_backend,
+            repair_asr_config_key,
+        )
+        if repair_summary.n_flagged:
+            logger.info(
+                "Repair (%s): %d/%d parsed items flagged degenerate -- %d resolved by "
+                "reparse, %d resolved by stronger ASR (%s), %d still degenerate",
+                parser_config_key,
+                repair_summary.n_flagged,
+                len(records),
+                repair_summary.n_resolved_by_reparse,
+                repair_summary.n_resolved_by_reasr,
+                repair_asr_config_key if repair_asr_backend is not None else "none configured",
+                repair_summary.n_still_degenerate,
+            )
+    elif repair_enabled:
+        logger.warning(
+            "repair_enabled=True but parser %r is not an OllamaTranscriptParser -- "
+            "skipping repair for this run.",
+            parser,
+        )
+
     predictions = _run_select_stage(
-        records, parses, data_root, artifacts_dir, split, language, selector, selector_config_key
+        records,
+        parses,
+        data_root,
+        artifacts_dir,
+        split,
+        language,
+        selector,
+        effective_selector_config_key,
     )
     n_fallback = sum(1 for p in predictions.values() if (p.raw or "").startswith("fallback"))
     n_select_error = sum(1 for p in predictions.values() if (p.raw or "").startswith("error"))
     logger.info(
         "Select (%s): %d predicted, %d fallback (parse failed), %d VLM-call error",
-        selector_config_key,
+        effective_selector_config_key,
         len(predictions) - n_fallback - n_select_error,
         n_fallback,
         n_select_error,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    config_key = f"{asr_config_key}__{parser_config_key}__{selector_config_key}"
+    config_key = f"{asr_config_key}__{parser_config_key}__{effective_selector_config_key}"
     csv_path = output_dir / f"prediction_{config_key}_{split.value}_{language.value}.csv"
     write_predictions_csv(list(predictions.values()), csv_path)
     logger.info("Wrote %d predictions to %s", len(predictions), csv_path)
@@ -242,6 +420,15 @@ def run_pipeline(
                 logger.info(
                     "Accuracy by %s (worst first):\n%s", column, breakdown.to_string(index=False)
                 )
+        quality = summarize_option_quality(error_table)
+        if quality["n_wrong"]:
+            logger.info(
+                "Of %d wrong predictions: %d pipeline artifact (degenerate parsed options), "
+                "%d genuine visual-reasoning miss",
+                quality["n_wrong"],
+                quality["n_pipeline_artifact"],
+                quality["n_genuine_miss"],
+            )
 
     return PipelineResult(
         prediction_csv=csv_path,
@@ -251,6 +438,7 @@ def run_pipeline(
         n_asr_ok=n_asr_ok,
         n_parse_ok=n_parse_ok,
         n_records=len(records),
+        repair_summary=repair_summary,
     )
 
 
@@ -261,6 +449,20 @@ def _build_asr_backend(settings: Settings) -> tuple[ASRBackend, str]:
         compute_type=settings.whisper_compute_type,
     )
     return backend, f"whisper-{settings.whisper_model_size}"
+
+
+def _build_repair_asr_backend(settings: Settings) -> tuple[ASRBackend | None, str]:
+    """`None` when repair is off -- step 2 of the escalation ladder then
+    simply never triggers (flagged items stop at the reparse-only step),
+    rather than the caller needing its own branch."""
+    if not settings.repair_enabled:
+        return None, "no-repair-asr"
+    backend: ASRBackend = WhisperLocalASR(
+        model_size=settings.repair_whisper_model_size,
+        device=settings.repair_whisper_device,
+        compute_type=settings.repair_whisper_compute_type,
+    )
+    return backend, f"whisper-{settings.repair_whisper_model_size}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -291,6 +493,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--ollama-select-model", default=None, help="Override AYNVQA_OLLAMA_SELECT_MODEL."
     )
     parser.add_argument("--ollama-base-url", default=None, help="Override AYNVQA_OLLAMA_BASE_URL.")
+    parser.add_argument(
+        "--repair-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override AYNVQA_REPAIR_ENABLED -- use --no-repair-enabled for an ablation run.",
+    )
     parser.add_argument("--log-level", default=None)
     return parser.parse_args(argv)
 
@@ -309,6 +517,8 @@ def main(argv: list[str] | None = None) -> None:
         overrides["ollama_select_model"] = args.ollama_select_model
     if args.ollama_base_url:
         overrides["ollama_base_url"] = args.ollama_base_url
+    if args.repair_enabled is not None:
+        overrides["repair_enabled"] = args.repair_enabled
     if overrides:
         settings = settings.model_copy(update=overrides)
 
@@ -319,7 +529,8 @@ def main(argv: list[str] | None = None) -> None:
     seed = args.seed if args.seed is not None else settings.random_seed
 
     asr_backend, asr_config_key = _build_asr_backend(settings)
-    parser_stage: TranscriptParser = OllamaTranscriptParser(
+    repair_asr_backend, repair_asr_config_key = _build_repair_asr_backend(settings)
+    parser_stage = OllamaTranscriptParser(
         model=settings.ollama_parse_model, base_url=settings.ollama_base_url
     )
     selector: VLMSelector = OllamaJointMCQSelector(
@@ -341,6 +552,9 @@ def main(argv: list[str] | None = None) -> None:
         selector_config_key=selector.name,
         sample_n=sample_n,
         seed=seed,
+        repair_enabled=settings.repair_enabled,
+        repair_asr_backend=repair_asr_backend,
+        repair_asr_config_key=repair_asr_config_key,
     )
 
     logger.info("Prediction CSV: %s", result.prediction_csv)

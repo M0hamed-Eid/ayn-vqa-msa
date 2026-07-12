@@ -5,12 +5,17 @@ using fake stages (no real Whisper, no real Ollama) so it runs instantly.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from pathlib import Path
 
+import httpx
+import pandas as pd
+
 from ayn_vqa.data.schema import Language, Split
-from ayn_vqa.run_pipeline import run_pipeline
-from ayn_vqa.stages.asr import Transcript
-from ayn_vqa.stages.parse import ParsedTranscript
+from ayn_vqa.run_pipeline import RepairSummary, run_pipeline
+from ayn_vqa.stages.asr import ASRBackend, Transcript
+from ayn_vqa.stages.parse import OllamaTranscriptParser, ParsedTranscript
 from ayn_vqa.stages.select import Prediction
 
 
@@ -135,3 +140,234 @@ def test_run_pipeline_devtest_has_no_labels_and_is_not_scored(
 
     assert result.format_check_ok
     assert result.metrics is None
+
+
+_DEGENERATE_PAYLOAD = {
+    "question": "q",
+    "option_0": "خيار أول",
+    "option_1": "خيار ثاني",
+    "option_2": "الخيارات هي",
+}
+_CLEAN_PAYLOAD = {
+    "question": "q",
+    "option_0": "خيار أول",
+    "option_1": "خيار ثاني",
+    "option_2": "خيار ثالث",
+}
+
+
+class _RepairASRBackend:
+    """Stands in for a stronger ASR model (e.g. whisper-large-v3): returns
+    a transcript distinguishable from `_FakeASRBackend`'s, so tests can
+    tell step 2 of the repair ladder apart from step 1."""
+
+    name = "fake-repair-asr"
+
+    def transcribe(self, record_id: str, audio_path: Path) -> Transcript:
+        return Transcript(
+            record_id, f"REPAIRED-transcript {record_id}", self.name, "fake", "msa", 0.01, None
+        )
+
+
+def _scripted_ollama_parser(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> OllamaTranscriptParser:
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return OllamaTranscriptParser(client=client)
+
+
+def test_run_pipeline_repair_resolves_via_reparse(mini_dataset: Path, tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.read())["messages"][0]["content"]
+        payload = _CLEAN_PAYLOAD if "previous attempt" in prompt else _DEGENERATE_PAYLOAD
+        return httpx.Response(200, json={"message": {"content": json.dumps(payload)}})
+
+    selector = _FakeSelector()
+    result = run_pipeline(
+        data_root=mini_dataset,
+        artifacts_dir=tmp_path / "artifacts",
+        output_dir=tmp_path / "reports",
+        experiments_md=tmp_path / "experiments.md",
+        split=Split.TRAIN,
+        language=Language.MSA,
+        asr_backend=_FakeASRBackend(),
+        asr_config_key="fake-asr",
+        parser=_scripted_ollama_parser(handler),
+        parser_config_key="ollama-parse",
+        selector=selector,
+        selector_config_key="fake-select",
+        sample_n=None,
+        seed=42,
+        repair_enabled=True,
+    )
+
+    assert result.repair_summary == RepairSummary(
+        n_flagged=7, n_resolved_by_reparse=7, n_resolved_by_reasr=0, n_still_degenerate=0
+    )
+    error_table = pd.read_csv(result.error_analysis_csv)
+    assert error_table["option_quality_ok"].all()
+    assert len(selector.calls) == 7  # every record still reached selection
+
+
+def test_run_pipeline_repair_resolves_via_asr_escalation(
+    mini_dataset: Path, tmp_path: Path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.read())["messages"][0]["content"]
+        resolved = "previous attempt" in prompt and "REPAIRED-transcript" in prompt
+        payload = _CLEAN_PAYLOAD if resolved else _DEGENERATE_PAYLOAD
+        return httpx.Response(200, json={"message": {"content": json.dumps(payload)}})
+
+    repair_backend: ASRBackend = _RepairASRBackend()
+    result = run_pipeline(
+        data_root=mini_dataset,
+        artifacts_dir=tmp_path / "artifacts",
+        output_dir=tmp_path / "reports",
+        experiments_md=tmp_path / "experiments.md",
+        split=Split.TRAIN,
+        language=Language.MSA,
+        asr_backend=_FakeASRBackend(),
+        asr_config_key="fake-asr",
+        parser=_scripted_ollama_parser(handler),
+        parser_config_key="ollama-parse",
+        selector=_FakeSelector(),
+        selector_config_key="fake-select",
+        sample_n=None,
+        seed=42,
+        repair_enabled=True,
+        repair_asr_backend=repair_backend,
+        repair_asr_config_key="fake-repair-asr",
+    )
+
+    assert result.repair_summary == RepairSummary(
+        n_flagged=7, n_resolved_by_reparse=0, n_resolved_by_reasr=7, n_still_degenerate=0
+    )
+
+
+def test_run_pipeline_repair_gives_up_gracefully_when_unresolved(
+    mini_dataset: Path, tmp_path: Path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": json.dumps(_DEGENERATE_PAYLOAD)}})
+
+    selector = _FakeSelector()
+    result = run_pipeline(
+        data_root=mini_dataset,
+        artifacts_dir=tmp_path / "artifacts",
+        output_dir=tmp_path / "reports",
+        experiments_md=tmp_path / "experiments.md",
+        split=Split.TRAIN,
+        language=Language.MSA,
+        asr_backend=_FakeASRBackend(),
+        asr_config_key="fake-asr",
+        parser=_scripted_ollama_parser(handler),
+        parser_config_key="ollama-parse",
+        selector=selector,
+        selector_config_key="fake-select",
+        sample_n=None,
+        seed=42,
+        repair_enabled=True,
+    )
+
+    assert result.repair_summary == RepairSummary(
+        n_flagged=7, n_resolved_by_reparse=0, n_resolved_by_reasr=0, n_still_degenerate=7
+    )
+    # never silently drops a record -- it proceeds to selection best-effort
+    assert len(selector.calls) == 7
+
+
+def test_run_pipeline_repair_is_a_no_op_when_nothing_flagged(
+    mini_dataset: Path, tmp_path: Path
+) -> None:
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, json={"message": {"content": json.dumps(_CLEAN_PAYLOAD)}})
+
+    result = run_pipeline(
+        data_root=mini_dataset,
+        artifacts_dir=tmp_path / "artifacts",
+        output_dir=tmp_path / "reports",
+        experiments_md=tmp_path / "experiments.md",
+        split=Split.TRAIN,
+        language=Language.MSA,
+        asr_backend=_FakeASRBackend(),
+        asr_config_key="fake-asr",
+        parser=_scripted_ollama_parser(handler),
+        parser_config_key="ollama-parse",
+        selector=_FakeSelector(),
+        selector_config_key="fake-select",
+        sample_n=None,
+        seed=42,
+        repair_enabled=True,
+    )
+
+    assert result.repair_summary == RepairSummary(0, 0, 0, 0)
+    assert call_count == 7  # one parse call per record -- no retries triggered
+
+
+def test_run_pipeline_repair_skips_gracefully_for_non_ollama_parser(
+    mini_dataset: Path, tmp_path: Path
+) -> None:
+    result = run_pipeline(
+        data_root=mini_dataset,
+        artifacts_dir=tmp_path / "artifacts",
+        output_dir=tmp_path / "reports",
+        experiments_md=tmp_path / "experiments.md",
+        split=Split.TRAIN,
+        language=Language.MSA,
+        asr_backend=_FakeASRBackend(),
+        asr_config_key="fake-asr",
+        parser=_FakeParser(),
+        parser_config_key="fake-parse",
+        selector=_FakeSelector(),
+        selector_config_key="fake-select",
+        sample_n=None,
+        seed=42,
+        repair_enabled=True,
+    )
+
+    assert result.repair_summary == RepairSummary(0, 0, 0, 0)
+    assert result.n_records == 7
+
+
+def test_run_pipeline_repair_on_and_off_use_separate_caches_and_outputs(
+    mini_dataset: Path, tmp_path: Path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.read())["messages"][0]["content"]
+        payload = _CLEAN_PAYLOAD if "previous attempt" in prompt else _DEGENERATE_PAYLOAD
+        return httpx.Response(200, json={"message": {"content": json.dumps(payload)}})
+
+    artifacts_dir = tmp_path / "artifacts"
+
+    def _run(repair_enabled: bool) -> pd.DataFrame:
+        result = run_pipeline(
+            data_root=mini_dataset,
+            artifacts_dir=artifacts_dir,
+            output_dir=tmp_path / "reports",
+            experiments_md=tmp_path / "experiments.md",
+            split=Split.TRAIN,
+            language=Language.MSA,
+            asr_backend=_FakeASRBackend(),
+            asr_config_key="fake-asr",
+            parser=_scripted_ollama_parser(handler),
+            parser_config_key="ollama-parse",
+            selector=_FakeSelector(),
+            selector_config_key="fake-select",
+            sample_n=None,
+            seed=42,
+            repair_enabled=repair_enabled,
+        )
+        return pd.read_csv(result.error_analysis_csv)
+
+    off_table = _run(False)
+    on_table = _run(True)
+
+    # repair off never touched the strict-retry path -> stayed degenerate;
+    # repair on resolved it -- if the two runs shared a cache, one of
+    # these would incorrectly show the other condition's result.
+    assert not off_table["option_quality_ok"].any()
+    assert on_table["option_quality_ok"].all()

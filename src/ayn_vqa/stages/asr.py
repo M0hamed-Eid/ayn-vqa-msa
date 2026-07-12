@@ -12,10 +12,35 @@ run against a live API.
 
 from __future__ import annotations
 
+import importlib.util
+import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+
+def _register_windows_cuda_dll_dirs() -> None:
+    """`nvidia-cublas-cu12`/`nvidia-cudnn-cu12` (installed via the `gpu`
+    dependency group) ship their DLLs inside the wheel rather than a
+    system CUDA install. PyTorch registers its own copies of these at
+    import time via `os.add_dll_directory`; ctranslate2 (what
+    `faster-whisper` actually runs on) does not, so on Windows
+    `device="cuda"` fails at the first `.transcribe()` call with
+    "cublas64_12.dll is not found" even with the packages installed and
+    a working GPU. Linux's dynamic linker finds these via the wheel's own
+    rpath, so this is a no-op there.
+    """
+    if sys.platform != "win32":
+        return
+    for package in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_nvrtc"):
+        spec = importlib.util.find_spec(package)
+        if spec is None or not spec.submodule_search_locations:
+            continue
+        bin_dir = Path(next(iter(spec.submodule_search_locations))) / "bin"
+        if bin_dir.is_dir():
+            os.add_dll_directory(str(bin_dir))
 
 
 @dataclass(frozen=True)
@@ -56,8 +81,10 @@ class _WhisperModelLike(Protocol):
 
 class WhisperLocalASR:
     """Local, offline transcription via `faster-whisper` (a CTranslate2
-    reimplementation of Whisper) -- much faster than plain `openai-whisper`
-    on CPU, which matters here since this machine has no confirmed GPU.
+    reimplementation of Whisper) -- much faster than plain `openai-whisper`.
+    M2 ran on CPU (int8) since no GPU was confirmed at the time; M4 (the
+    repair-escalation ladder's stronger-ASR step) confirmed this machine
+    does have an NVIDIA GPU and runs `device="cuda"` there.
 
     Model weights download from Hugging Face on first use per `model_size`
     and are cached under the user's HF cache afterward; no API key, no
@@ -81,6 +108,8 @@ class WhisperLocalASR:
         else:
             from faster_whisper import WhisperModel  # heavy import; deferred to construction
 
+            if device.startswith("cuda"):
+                _register_windows_cuda_dll_dirs()
             self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
     def transcribe(self, record_id: str, audio_path: Path) -> Transcript:

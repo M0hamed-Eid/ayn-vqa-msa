@@ -61,3 +61,43 @@ def test_parse_non_json_content_becomes_error() -> None:
     result = parser.parse("id0", "transcript")
 
     assert not result.ok
+
+
+def test_strict_parse_sends_the_stricter_prompt() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.read())
+        payload = {"question": "q", "option_0": "a", "option_1": "b", "option_2": "c"}
+        return httpx.Response(200, json={"message": {"content": json.dumps(payload)}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    parser = OllamaTranscriptParser(client=client)
+
+    result = parser.parse("id0", "some transcript", strict=True)
+
+    assert result.ok
+    body = captured["body"]
+    assert isinstance(body, dict)
+    prompt = body["messages"][0]["content"]
+    assert "previous attempt" in prompt
+    assert "some transcript" in prompt
+
+
+def test_non_strict_parse_does_not_send_the_stricter_prompt() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.read())
+        payload = {"question": "q", "option_0": "a", "option_1": "b", "option_2": "c"}
+        return httpx.Response(200, json={"message": {"content": json.dumps(payload)}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    parser = OllamaTranscriptParser(client=client)
+
+    parser.parse("id0", "some transcript")
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    prompt = body["messages"][0]["content"]
+    assert "previous attempt" not in prompt
