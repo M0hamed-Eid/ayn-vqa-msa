@@ -84,6 +84,26 @@ def test_non_cot_selector_has_the_plain_name() -> None:
     assert selector.name == "ollama-joint-mcq"
 
 
+def test_non_default_model_gets_a_distinct_name() -> None:
+    """A different `.name` is what isolates a model-swap run's select
+    cache from the default model's -- without it, swapping
+    --ollama-select-model alone would silently replay the default
+    model's cached predictions and never call the new model at all."""
+    selector = OllamaJointMCQSelector(
+        model="qwen3-vl:8b", client=_client_returning({"answer_index": 0})
+    )
+
+    assert selector.name == "ollama-joint-mcq-qwen3-vl-8b"
+
+
+def test_non_default_model_plus_cot_combines_both_suffixes() -> None:
+    selector = OllamaJointMCQSelector(
+        model="qwen3-vl:8b", client=_client_returning({"answer_index": 0}), use_cot=True
+    )
+
+    assert selector.name == "ollama-joint-mcq-qwen3-vl-8b-cot"
+
+
 def test_cot_selector_has_a_distinct_name(tmp_path: Path) -> None:
     """A different `.name` is what isolates the M5 cot-on/cot-off select
     caches from each other -- without it, an ablation run would silently

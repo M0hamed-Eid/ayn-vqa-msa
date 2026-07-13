@@ -64,7 +64,14 @@ class Settings(BaseSettings):
     pipeline_sample_n: int | None = None  # None = the whole split
     ollama_base_url: str = "http://localhost:11434"
     ollama_parse_model: str = "qwen2.5vl:7b"
-    ollama_select_model: str = "qwen2.5vl:7b"
+    # M6: swapped from qwen2.5vl:7b to qwen3-vl:8b for the select stage
+    # specifically -- a full 500-item, same-pipeline ablation measured
+    # 79.00% (395/500) vs. qwen2.5vl's 74.80%, +21 correct net of
+    # regressions, most of which land on items already known to be hard or
+    # parser-degenerate from the M5 CoT/few-shot regression checks (see
+    # docs/M6_VLM_SWAP.md). Parsing stays on qwen2.5vl:7b -- only the
+    # select stage was evaluated and changed.
+    ollama_select_model: str = "qwen3-vl:8b"
 
     # M4: pipeline-robustness repair escalation. On by default, but a
     # single flag away from an ablation run (`AYNVQA_REPAIR_ENABLED=false`

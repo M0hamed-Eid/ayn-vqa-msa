@@ -94,6 +94,7 @@ Question: {question}
 2: {option_2}"""
 
 _DEFAULT_FEWSHOT_NUM_CTX = 16384  # Ollama's own 4096 default 400s on >1 image; see M5 report.
+_DEFAULT_MODEL = "qwen2.5vl:7b"
 
 
 class VLMSelector(Protocol):
@@ -112,7 +113,7 @@ class VLMSelector(Protocol):
 class OllamaJointMCQSelector:
     def __init__(
         self,
-        model: str = "qwen2.5vl:7b",
+        model: str = _DEFAULT_MODEL,
         base_url: str = "http://localhost:11434",
         client: Any | None = None,
         use_cot: bool = False,
@@ -122,16 +123,21 @@ class OllamaJointMCQSelector:
         self._ollama = OllamaClient(base_url=base_url, client=client)
         self._use_cot = use_cot
         self._fewshot_num_ctx = fewshot_num_ctx
-        # Distinct cache/output key when CoT changes what this stage
-        # produces -- the same lesson M4's parser-v2 swap had to learn the
-        # hard way: without this, a cot-on and cot-off run would collide on
-        # the same select-stage cache file and silently replay each
-        # other's predictions on a second run. Few-shot doesn't get a
+        # Distinct cache/output key whenever CoT or the underlying model
+        # changes what this stage produces -- the same lesson M4's
+        # parser-v2 swap had to learn the hard way: without this, two runs
+        # that actually differ would collide on the same select-stage
+        # cache file and silently replay each other's predictions (e.g. a
+        # model swap would just replay the default model's cached answers
+        # and never call the new model at all). Few-shot doesn't get a
         # `.name` variant here -- it's a per-call, per-record concern
         # (exemplars come from a separate retrieval stage), so its cache
         # isolation is `run_pipeline.py`'s `effective_selector_config_key`
         # suffix, the same mechanism M4's repair ladder already uses.
-        self.name = "ollama-joint-mcq-cot" if use_cot else "ollama-joint-mcq"
+        base_name = "ollama-joint-mcq"
+        if model != _DEFAULT_MODEL:
+            base_name = f"{base_name}-{model.replace(':', '-').replace('.', '-')}"
+        self.name = f"{base_name}-cot" if use_cot else base_name
 
     def predict(
         self,
