@@ -24,7 +24,7 @@ htmlcov/
 .coverage.*
 
 # Generated audit artifacts (regenerate with `uv run aynvqa-audit`)
-reports/*
+
 !reports/.gitkeep
 
 # Cached stage outputs (ASR transcripts, later: parsed transcripts, VLM

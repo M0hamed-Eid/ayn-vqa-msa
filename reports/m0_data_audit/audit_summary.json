@@ -1,0 +1,116 @@
+{
+  "total_records": 4000,
+  "parse_errors_by_split": {
+    "train_msa": 0,
+    "dev_msa": 0,
+    "devtest_msa": 0
+  },
+  "media": {
+    "images_missing": 0,
+    "audio_missing": 0,
+    "images_unreadable": 3,
+    "audio_unreadable": 0
+  },
+  "by_split_language": [
+    {
+      "split": "dev",
+      "language": "msa",
+      "n_records": 500
+    },
+    {
+      "split": "devtest",
+      "language": "msa",
+      "n_records": 500
+    },
+    {
+      "split": "train",
+      "language": "msa",
+      "n_records": 3000
+    }
+  ],
+  "image_formats": {
+    "JPEG": 3816,
+    "PNG": 181,
+    "nan": 3
+  },
+  "animated_gif_count": 0,
+  "image_width_stats": {
+    "count": 3997.0,
+    "mean": 1229.8256192144108,
+    "std": 254.76837478175554,
+    "min": 150.0,
+    "25%": 1042.0,
+    "50%": 1280.0,
+    "75%": 1300.0,
+    "max": 3024.0
+  },
+  "image_height_stats": {
+    "count": 3997.0,
+    "mean": 997.2551913935451,
+    "std": 228.79516418261116,
+    "min": 100.0,
+    "25%": 816.0,
+    "50%": 956.0,
+    "75%": 1108.0,
+    "max": 2015.0
+  },
+  "audio_sample_rates": {
+    "24000": 4000
+  },
+  "audio_channels": {
+    "1": 4000
+  },
+  "audio_duration_sec_stats": {
+    "count": 4000.0,
+    "mean": 17.858859499999998,
+    "std": 3.485604425906152,
+    "min": 8.296958333333333,
+    "25%": 15.486958333333334,
+    "50%": 17.481625,
+    "75%": 19.806958333333334,
+    "max": 33.929625
+  },
+  "label_distribution": {
+    "2": 1196,
+    "1": 1167,
+    "0": 1137,
+    "<NA>": 500
+  },
+  "country_distribution": {
+    "nan": 500,
+    "Lebanon": 197,
+    "Syria": 197,
+    "UAE": 197,
+    "Algeria": 196,
+    "Bahrain": 196,
+    "Egypt": 196,
+    "Jordan": 196,
+    "Kuwait": 196,
+    "Libya": 196,
+    "Oman": 196,
+    "Palestine": 196,
+    "Qatar": 196,
+    "Saudi Arabia": 196,
+    "Sudan": 196,
+    "Tunisia": 196,
+    "Yemen": 196,
+    "Morocco": 195,
+    "Iraq": 166
+  },
+  "category_distribution": {
+    "Culture, Arts & Entertainment": 595,
+    "People, Society & Education": 582,
+    "nan": 500,
+    "Vehicles & Transportation": 432,
+    "Religion & Spirituality": 367,
+    "History, Geography & National Identity": 339,
+    "Sports & Recreation": 333,
+    "Food & Cooking": 308,
+    "Objects, Materials & Clothing": 308,
+    "Geography, Buildings & Landmarks": 236
+  },
+  "duplicates": {
+    "exact_duplicate_pairs": 0,
+    "near_duplicate_pairs": 3
+  }
+}

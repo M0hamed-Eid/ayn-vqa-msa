@@ -1,0 +1,147 @@
+2026-07-10 20:00:25,821 INFO     ayn_vqa.audit.run_audit: Data root: C:\Users\Admin\Documents\AynVQA-ArabicNLP26
+2026-07-10 20:00:25,835 INFO     ayn_vqa.audit.run_audit: Output dir: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit
+2026-07-10 20:00:25,836 INFO     ayn_vqa.audit.run_audit: Loading train/msa ...
+2026-07-10 20:00:25,848 INFO     ayn_vqa.audit.run_audit: train/msa: 3000 records loaded, 0 parse errors
+2026-07-10 20:00:51,176 INFO     ayn_vqa.audit.run_audit: Loading dev/msa ...
+2026-07-10 20:00:51,183 INFO     ayn_vqa.audit.run_audit: dev/msa: 500 records loaded, 0 parse errors
+2026-07-10 20:00:55,367 INFO     ayn_vqa.audit.run_audit: Loading devtest/msa ...
+2026-07-10 20:00:55,371 INFO     ayn_vqa.audit.run_audit: devtest/msa: 500 records loaded, 0 parse errors
+2026-07-10 20:00:59,502 INFO     ayn_vqa.audit.run_audit: Hashing images for duplicate detection ...
+2026-07-10 20:01:02,608 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record 0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349.gif'
+2026-07-10 20:01:20,220 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record 4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249.gif'
+2026-07-10 20:01:30,592 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861.gif'
+2026-07-10 20:01:44,249 INFO     ayn_vqa.audit.run_audit: Duplicate scan: 0 exact-duplicate groups, 3 near-duplicate pairs
+2026-07-10 20:01:44,250 INFO     ayn_vqa.audit.run_audit: Rendering random sample grid (n=24, seed=42) ...
+2026-07-10 20:01:45,258 INFO     ayn_vqa.audit.report: Wrote audit reports to C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit
+2026-07-10 20:01:45,270 INFO     ayn_vqa.audit.run_audit: Audit complete in 79.4s.
+2026-07-10 20:01:45,271 INFO     ayn_vqa.audit.run_audit: Report: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\audit_report.md
+2026-07-10 20:01:45,272 INFO     ayn_vqa.audit.run_audit: Manifest: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\file_manifest.csv
+2026-07-10 20:01:45,273 INFO     ayn_vqa.audit.run_audit: Summary JSON: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\audit_summary.json
+2026-07-10 20:04:18,054 INFO     ayn_vqa.audit.run_audit: Data root: C:\Users\Admin\Documents\AynVQA-ArabicNLP26
+2026-07-10 20:04:18,081 INFO     ayn_vqa.audit.run_audit: Output dir: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit
+2026-07-10 20:04:18,082 INFO     ayn_vqa.audit.run_audit: Loading train/msa ...
+2026-07-10 20:04:18,094 INFO     ayn_vqa.audit.run_audit: train/msa: 3000 records loaded, 0 parse errors
+2026-07-10 20:04:18,712 INFO     ayn_vqa.audit.run_audit: Loading dev/msa ...
+2026-07-10 20:04:18,715 INFO     ayn_vqa.audit.run_audit: dev/msa: 500 records loaded, 0 parse errors
+2026-07-10 20:04:18,812 INFO     ayn_vqa.audit.run_audit: Loading devtest/msa ...
+2026-07-10 20:04:18,814 INFO     ayn_vqa.audit.run_audit: devtest/msa: 500 records loaded, 0 parse errors
+2026-07-10 20:04:18,906 INFO     ayn_vqa.audit.run_audit: Hashing images for duplicate detection ...
+2026-07-10 20:04:20,200 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record 0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349.gif'
+2026-07-10 20:04:32,016 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record 4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249.gif'
+2026-07-10 20:04:44,288 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861.gif'
+2026-07-10 20:04:57,410 INFO     ayn_vqa.audit.run_audit: Duplicate scan: 0 exact-duplicate groups, 3 near-duplicate pairs
+2026-07-10 20:04:57,411 INFO     ayn_vqa.audit.run_audit: Rendering random sample grid (n=24, seed=42) ...
+2026-07-10 20:04:58,448 INFO     ayn_vqa.audit.report: Wrote audit reports to C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit
+2026-07-10 20:04:58,461 INFO     ayn_vqa.audit.run_audit: Audit complete in 40.4s.
+2026-07-10 20:04:58,463 INFO     ayn_vqa.audit.run_audit: Report: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\audit_report.md
+2026-07-10 20:04:58,465 INFO     ayn_vqa.audit.run_audit: Manifest: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\file_manifest.csv
+2026-07-10 20:04:58,466 INFO     ayn_vqa.audit.run_audit: Summary JSON: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\audit_summary.json
+2026-07-10 20:26:34,342 INFO     ayn_vqa.audit.run_audit: Data root: C:\Users\Admin\Documents\AynVQA-ArabicNLP26
+2026-07-10 20:26:34,346 INFO     ayn_vqa.audit.run_audit: Output dir: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit
+2026-07-10 20:26:34,346 INFO     ayn_vqa.audit.run_audit: Loading train/msa ...
+2026-07-10 20:26:34,358 INFO     ayn_vqa.audit.run_audit: train/msa: 3000 records loaded, 0 parse errors
+2026-07-10 20:26:34,951 INFO     ayn_vqa.audit.run_audit: Loading dev/msa ...
+2026-07-10 20:26:34,954 INFO     ayn_vqa.audit.run_audit: dev/msa: 500 records loaded, 0 parse errors
+2026-07-10 20:26:35,048 INFO     ayn_vqa.audit.run_audit: Loading devtest/msa ...
+2026-07-10 20:26:35,051 INFO     ayn_vqa.audit.run_audit: devtest/msa: 500 records loaded, 0 parse errors
+2026-07-10 20:26:35,150 INFO     ayn_vqa.audit.run_audit: Hashing images for duplicate detection ...
+2026-07-10 20:26:36,449 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record 0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\0e3613a5dc40806fd0ea11158eead63e2c4878d853228654b7e4035287e86349.gif'
+2026-07-10 20:26:43,838 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record 4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\4d11a045c58332c3262bdd63c9cd9b5d341752bf6915e11055864386b46d0249.gif'
+2026-07-10 20:26:49,380 ERROR    ayn_vqa.audit.run_audit: Failed to hash image for record f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861 (C:\Users\Admin\Documents\AynVQA-ArabicNLP26\images\f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861.gif)
+Traceback (most recent call last):
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\run_audit.py", line 76, in _hash_images
+    phash_by_id[record.id] = dhash(path)
+                             ~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\src\ayn_vqa\audit\hashing.py", line 50, in dhash
+    with Image.open(path) as img:
+         ~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\Documents\ayn-vqa-msa\.venv\Lib\site-packages\PIL\Image.py", line 3715, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'C:\\Users\\Admin\\Documents\\AynVQA-ArabicNLP26\\images\\f2b1cfbeac305700ff2799c9ad19731549caaf18a5a7dac749cd9ae726cfe861.gif'
+2026-07-10 20:26:55,397 INFO     ayn_vqa.audit.run_audit: Duplicate scan: 0 exact-duplicate groups, 3 near-duplicate pairs
+2026-07-10 20:26:55,398 INFO     ayn_vqa.audit.run_audit: Rendering random sample grid (n=24, seed=42) ...
+2026-07-10 20:26:55,923 INFO     ayn_vqa.audit.report: Wrote audit reports to C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit
+2026-07-10 20:26:55,927 INFO     ayn_vqa.audit.run_audit: Audit complete in 21.6s.
+2026-07-10 20:26:55,928 INFO     ayn_vqa.audit.run_audit: Report: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\audit_report.md
+2026-07-10 20:26:55,928 INFO     ayn_vqa.audit.run_audit: Manifest: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\file_manifest.csv
+2026-07-10 20:26:55,929 INFO     ayn_vqa.audit.run_audit: Summary JSON: C:\Users\Admin\Documents\ayn-vqa-msa\reports\m0_data_audit\audit_summary.json
