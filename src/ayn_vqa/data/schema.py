@@ -29,13 +29,18 @@ class Language(StrEnum):
 
 
 class Split(StrEnum):
-    """`test` is deliberately not modeled: it doesn't exist on disk yet
-    (blind set, released 2026-07-20) and loading it is not an M0 concern.
+    """`test` is the blind competition split, released 2026-07-20. Like
+    `devtest`, its rows omit `label`/`country`/`category`/`subcategory`
+    entirely (see `Task1aRecord` below); the pipeline's `has_labels` check
+    (`run_pipeline.py`) already treats any unlabeled split as submission-only
+    and skips scoring, so no special-casing was needed here beyond adding
+    the member itself.
     """
 
     TRAIN = "train"
     DEV = "dev"
     DEVTEST = "devtest"
+    TEST = "test"
 
 
 class Task1aRecord(BaseModel):

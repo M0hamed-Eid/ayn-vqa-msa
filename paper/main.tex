@@ -1,0 +1,232 @@
+% AynVQA-MSA / Digilians submission to ImageEval 2026, Task 1a (MSA track)
+%
+% Built on the official ACL style files (acl-org/acl-style-files, acl_latex.tex + acl.sty),
+% since the ImageEval 2026 organizers have not yet released a task-specific template.
+% See paper/README.md for build instructions and a list of open TODOs.
+
+\documentclass[11pt]{article}
+
+% Change "review" to "final" for the camera-ready version (adds page numbers, removes
+% anonymity requirements). Keep "review" while the venue's blind-review policy is unconfirmed.
+\usepackage[review]{acl}
+
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+\usepackage{booktabs}
+
+\title{Digilians at ImageEval 2026: Spoken Visual Question Answering for Modern Standard Arabic (Task 1a)}
+
+% TODO(team): replace with real author names/affiliations/emails for the camera-ready
+% version, once the venue's review-anonymity policy is confirmed. Left anonymous for now
+% since \usepackage[review]{acl} is active above.
+\author{Anonymous ACL submission}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe the Digilians submission to Task 1a (Spoken Visual Question Answering, MSA track) of the ImageEval 2026 shared task. Unlike the official end-to-end baseline, our system decomposes the problem into independently cacheable stages: automatic speech recognition, schema-constrained transcript parsing that recovers a question and three candidate answers from continuous Arabic speech, a conditional repair mechanism that escalates to a larger ASR model only for semantically degenerate parses, and a joint multiple-choice visual reasoning stage that evaluates all three candidates against the image simultaneously rather than scoring them independently. On the labeled development split (500 records, MSA), our production configuration reaches 79.0\% accuracy, well above both trivial baselines and the official baseline's 39.8\%. We find that upgrading only the answer-selection model accounts for nearly the entire gain over an earlier configuration, while chain-of-thought prompting and few-shot exemplar retrieval show no measurable benefit. We also report a caching-related reproducibility issue uncovered during development and discuss its implications for pipelines built the same way.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Spoken Visual Question Answering (SVQA) extends conventional Visual Question Answering by removing the assumption that the question arrives as text. Task 1a of the ImageEval 2026 shared task \citep{imageeval2026task1a} instantiates this for Modern Standard Arabic (MSA): each record pairs an image with a single spoken audio clip that contains both the question and its three candidate answers, and the system must output a prediction index $y \in \{0,1,2\}$. Formally, the system implements
+\begin{equation}
+  \label{eq:task}
+  f(I, A) \rightarrow y, \quad y \in \{0,1,2\},
+\end{equation}
+where $I$ is the input image and $A$ is the spoken Arabic audio. No textual channel for the question exists at any point in the input --- everything the system knows about what is being asked must first be recovered from speech.
+
+This compounds three difficulties into one benchmark. First, MSA transcription is itself harder than English in this dataset: the organizers' own baseline scores 39.8\% accuracy on the MSA track against 66.4\% on the parallel English track for an identical task design, a 26.6-point gap on the same end-to-end model that differs only in spoken language. Second, the audio does not announce option boundaries (``Option One'', ``Option Two''); the question and three answers are spoken continuously, sometimes separated only by pause or speech rhythm, and recovering that structure is an extraction problem in its own right, distinct from transcription accuracy. Third, once a clean question and three options exist, the remaining problem is genuine multimodal reasoning over the image. Manual inspection of the dataset during development surfaced recurring demands on this reasoning stage beyond simple object recognition: scene-level understanding, reading text embedded in the image (OCR), cultural/historical/geographical knowledge, commonsense reasoning, and joint reasoning that combines the image, the question, and the candidate answers together.
+
+The official baseline treats this as a single end-to-end call: one vision-language model receives the audio and image and predicts an answer directly, with a bare regular expression extracting the index from free-text output. This hides every intermediate failure inside one opaque call and makes error analysis --- was the failure in hearing, in segmentation, or in reasoning? --- effectively impossible. We instead decompose the task into independently testable stages, each with a well-defined input/output contract, and constrain every machine-read model output with JSON schemas rather than regex parsing.
+
+Our contributions are:
+\begin{itemize}
+  \item A modular SVQA pipeline separating speech recognition, transcript parsing, conditional repair, and joint visual reasoning, with every stage independently cacheable (\S\ref{sec:system}, \S\ref{sec:infra}).
+  \item Schema-constrained transcript parsing that recovers a structured \{\texttt{question}, \texttt{option\_0}, \texttt{option\_1}, \texttt{option\_2}\} object instead of relying on brittle free-text extraction (\S\ref{sec:parsing}).
+  \item A conditional repair mechanism that detects semantically degenerate --- but schema-valid --- parses and selectively re-runs a stronger ASR model only when needed (\S\ref{sec:repair}).
+  \item Joint multiple-choice visual reasoning, in which the selector compares all three candidates against the image in a single prompt rather than scoring them independently (\S\ref{sec:selector}).
+  \item A fully cacheable experimental framework that let us isolate and measure the contribution of each design choice individually, following a strict single-variable-at-a-time protocol (\S\ref{sec:results}).
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+Our ASR stage builds on Whisper \citep{radford2023whisper}, a large-scale weakly-supervised speech recognition model. Our transcript-parsing and answer-selection stages are both implemented as calls to Qwen-family vision-language models \citep{bai2023qwenvl, bai2025qwen25vl}, served locally rather than through a hosted API. We treat the official Task 1a baseline --- a single end-to-end vision-language model call with regular-expression output parsing --- as the primary point of comparison throughout this paper, since it is the only other system evaluated on this exact task formulation at the time of writing.
+
+\section{System Description}
+\label{sec:system}
+
+\subsection{Architectural Overview}
+\label{sec:overview}
+
+Rather than describing the pipeline as a flat list of four components, we organize it into three conceptual layers, each responsible for a distinct kind of failure:
+\begin{description}
+  \item[Layer 1 --- Perception:] automatic speech recognition (\S\ref{sec:asr}), which turns raw audio into transcript text and nothing more.
+  \item[Layer 2 --- Language Understanding:] transcript parsing and conditional repair (\S\ref{sec:parsing}--\S\ref{sec:repair}), which recover and, when necessary, fix the structured question and three candidate answers.
+  \item[Layer 3 --- Multimodal Reasoning:] the joint selector (\S\ref{sec:selector}), which is the only stage that ever looks at the image.
+\end{description}
+Every arrow between stages is also a cache boundary (\S\ref{sec:infra}): intermediate output is written to disk immediately, so changing one downstream component does not require recomputing upstream stages, and a crashed run resumes rather than restarting. This separation is what let us isolate and attribute the effect of individual design changes cleanly in \S\ref{sec:results}, rather than only being able to compare opaque end-to-end configurations against each other.
+
+\subsection{Perception: Automatic Speech Recognition}
+\label{sec:asr}
+
+The primary ASR pass uses Whisper (medium), run locally via \texttt{faster-whisper} on CPU with int8 quantization, on every record. Records subsequently flagged by the repair mechanism (\S\ref{sec:repair}) are re-transcribed with the larger Whisper large-v3 on GPU (float16). Keeping the cheaper model on the default path and reserving the larger model for a minority of flagged records keeps the average per-record cost low while still having a stronger fallback available for the hardest cases.
+
+ASR is implemented behind a backend interface (Python \texttt{Protocol}) with two additional implementations --- a QCRI Fanar Aura-STT wrapper and an OpenAI \texttt{gpt-4o-transcribe} wrapper --- that are fully unit-tested against mocked HTTP traffic but have not been exercised against a live service. We are precise about this distinction throughout the paper: ``implemented'' and ``evaluated'' are not the same claim, and all results in \S\ref{sec:results} use the Whisper backend exclusively.
+
+Every ASR result, including a failed transcript, is written to cache immediately, so a transient failure is not silently retried forever on every subsequent run, but is also not automatically retried without a human clearing the relevant cache entry.
+
+\subsection{Language Understanding: Transcript Parsing}
+\label{sec:parsing}
+
+A text-only call to a local vision-language model (Qwen2.5-VL, used here purely as a text model with no image input) turns the raw transcript into a structured object, with output constrained by JSON schema to exactly four fields: \texttt{question}, \texttt{option\_0}, \texttt{option\_1}, and \texttt{option\_2}. This is the same anti-regex design principle used at the selector stage (\S\ref{sec:selector}), applied one stage earlier.
+
+If the upstream transcript failed or is empty, this stage short-circuits with a synthetic failed parse \emph{without} writing to cache. This is a small but important self-healing property: because nothing is written to the parse cache in that case, fixing the underlying ASR problem later means the parse stage automatically retries on the very next run, with no manual cache invalidation required.
+
+The parsing prompt went through two revisions during development; \S\ref{sec:reproducibility} discusses a reproducibility issue this transition exposed.
+
+\subsection{Reliability: Conditional Repair}
+\label{sec:repair}
+
+A parse can satisfy the schema --- three non-null strings --- while still being unusable: an empty or truncated option, leftover Arabic boilerplate leaking into an option (e.g.\ a phrase meaning ``the options are''), duplicated options, a fabricated placeholder option, or one option that is merely a substring of another. A rule-based detector flags these cases and triggers a three-step escalation, stopping at the first step that succeeds:
+\begin{enumerate}
+  \item \textbf{Stricter reparse.} Re-run the parser against the same transcript with a stricter prompt, on the theory that ASR was fine and only parsing needs another attempt.
+  \item \textbf{Escalate ASR, then reparse.} Re-transcribe the same audio with Whisper large-v3 (GPU) and parse that transcript instead. This is the point where the ladder's cost jumps meaningfully, which is why it is reserved for records that already failed the cheaper first step.
+  \item \textbf{Give up.} If step 2 still fails, the pipeline proceeds unrepaired rather than blocking --- a corrupted-but-present set of options still flows downstream, and the selector will very likely get that record wrong, but the pipeline as a whole keeps moving.
+\end{enumerate}
+Each escalation step writes to its own isolated cache namespace rather than overwriting the original parse cache, which later lets error analysis distinguish ``repair fixed it'' from ``repair was attempted and failed'' from ``repair never triggered'' for the same record.
+
+\subsection{Few-Shot Exemplar Retrieval (Off by Default)}
+\label{sec:retrieval}
+
+An optional, off-by-default retrieval subsystem classifies the query image into a fixed taxonomy of 9 categories / 31 subcategories via a JSON-schema-constrained VLM call, then seeded-randomly samples up to $k$ category-matched exemplars from the labeled training split. Each exemplar is hydrated into a full (question, options, gold answer) triple by re-running the same ASR and parse stage functions against training data, and the resulting exemplars are shown to the selector as multi-turn few-shot context. We evaluate its effect in \S\ref{sec:results}; it remains off in the production configuration.
+
+\subsection{Multimodal Reasoning: Joint Visual Selection}
+\label{sec:selector}
+
+The selector receives the image and all three candidate options in a single multimodal prompt and returns \texttt{answer\_index}, constrained by JSON schema to $\{0,1,2\}$. We deliberately avoid scoring each option independently against the image and question and taking the highest-scoring one. When candidates are semantically close (e.g.\ \emph{dog} / \emph{wolf} / \emph{fox}), independent scoring prevents the model from directly comparing competing hypotheses, whereas joint presentation lets it reason comparatively --- closer to how a person would work through a multiple-choice question by considering all options together before committing to one.
+
+This also clarifies where reasoning happens relative to the official baseline. The baseline reasons over raw, noisy audio and an image in one internal call, with no inspectable intermediate representation. Our selector instead reasons over a validated, structured question and option set, having already had speech understanding handled entirely by upstream stages --- it can dedicate its full capacity to visual and comparative reasoning rather than splitting effort across speech understanding, segmentation, and vision at once.
+
+The production selector is Qwen3-VL (8B)\footnote{TODO(team): cite the Qwen3-VL technical report here once its exact citation is verified -- see the \texttt{qwen3vl2025} placeholder entry in \texttt{references.bib}.}; an earlier configuration used Qwen2.5-VL (7B) with every other stage held identical. The effect of this single swap is reported in \S\ref{sec:results} and is, by a wide margin, the single largest gain of any change we made.
+
+\section{Engineering Infrastructure}
+\label{sec:infra}
+
+Every pipeline stage owns an independent, on-disk cache namespace (\texttt{artifacts/\{asr,parse,repair,select\}/}), rather than the pipeline sharing one global cache. If only the selector model changes, a re-run loads existing transcripts and parsed questions from cache and executes only the selector stage, avoiding hours of redundant computation. Because every successfully processed record is written to cache immediately, an interrupted long-running experiment resumes from its last completed record on the next invocation rather than restarting from scratch.
+
+Every reported accuracy, balanced-accuracy, and macro-F1 number in this paper is computed by the organizers' own vendored, unmodified scorer and format checker, not a custom evaluation script, so results are directly comparable to what the competition leaderboard itself would compute. Completed experiments are logged automatically (configuration, split, models, metrics) to an append-only, version-controlled log, which is what makes the milestone-by-milestone reconstruction in \S\ref{sec:results} possible after the fact.
+
+We highlight this infrastructure as more than incidental engineering: it is what made six-plus full-scale, single-variable experimental iterations feasible within the project timeline (\S\ref{sec:results}), and its one demonstrated failure mode --- an under-specified cache key silently mixing outputs from two different pipeline versions --- is itself a concrete, reportable finding (\S\ref{sec:reproducibility}).
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+All results are on the labeled \texttt{dev} split, MSA language track (500 records); the \texttt{en} track exists only for internal comparison and is not scored here. ASR uses Whisper medium (primary pass) and Whisper large-v3 (repair-escalation pass only), both served locally via \texttt{faster-whisper}/CTranslate2. The parser and selector are served locally through Ollama: \texttt{qwen2.5vl:7b} for parsing throughout, and \texttt{qwen2.5vl:7b} or \texttt{qwen3-vl:8b} for selection, depending on configuration (\S\ref{sec:selector}).
+
+We report accuracy, balanced accuracy, and macro F1. The gap between the latter two matters on this task: a constant-prediction baseline (always index 0) scores higher raw accuracy than random guessing (35.8\% vs.\ 33.4\%) simply because label 0 is marginally over-represented, but its macro F1 (17.6\%) is roughly half of random's (33.2\%), since it never predicts the other two classes. We report all three metrics rather than leading with accuracy alone for this reason.
+
+Every experiment changes exactly one component relative to the previous stable configuration and is evaluated at full scale before being adopted or discarded; \S\ref{sec:results} reports this sequence in the order it was run: (i) trivial baselines, (ii) the full ASR$\rightarrow$parse$\rightarrow$select pipeline with no repair, (iii) repair enabled, (iv) chain-of-thought prompting on top of repair, (v) few-shot retrieval on top of repair, (vi) the Qwen3-VL selector swap on top of repair.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Main Results}
+
+Table~\ref{tab:results} summarizes every scored configuration. The production pipeline (repair enabled, Qwen3-VL selector) reaches 79.0\% accuracy / 78.75\% balanced accuracy / 78.80\% macro F1 (395/500), roughly double the trivial baselines and well above the 39.8\% official baseline.
+
+\begin{table*}[t]
+  \centering
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Configuration} & \textbf{Accuracy} & \textbf{Bal.\ Acc.} & \textbf{Macro F1} \\
+    \midrule
+    Official baseline (Qwen2.5-Omni, MSA) & 39.80\% & --- & --- \\
+    random & 33.40\% & 33.22\% & 33.20\% \\
+    constant-0 & 35.80\% & 33.33\% & 17.57\% \\
+    Full pipeline, no repair (best observed run) & 82.00\% & 83.81\% & 82.23\% \\
+    Full pipeline, no repair (worst observed run) & 71.60\% & 71.41\% & 71.43\% \\
+    + repair (M4, adopted baseline) & 74.80\% & 74.71\% & 74.71\% \\
+    \quad + chain-of-thought & 75.00\% & 74.86\% & 74.85\% \\
+    \quad + few-shot retrieval ($k=2$) & 74.80\% & 74.65\% & 74.71\% \\
+    \quad + Qwen3-VL selector (M6, frozen production) & \textbf{79.00\%} & \textbf{78.75\%} & \textbf{78.80\%} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Dev/MSA results ($n=500$). Every row below the trivial baselines changes exactly one component relative to the row(s) above it. M6 is the frozen production configuration. ``No repair'' rows report the best and worst of several runs of the nominally identical configuration; see \S\ref{sec:reproducibility}.}
+  \label{tab:results}
+\end{table*}
+
+\subsection{Interpretation}
+\label{sec:interpretation}
+
+The single largest gain (+4.2 points, 74.80\%$\rightarrow$79.00\%) comes from replacing only the selector model (Qwen2.5-VL$\rightarrow$Qwen3-VL) with ASR, parsing, and repair held fixed. Because every other stage was frozen at that point, the attribution is clean: the bottleneck at the repair-only configuration was in visual/comparative reasoning over the three options, not in recovering a clean question-and-options structure from the audio. Improving the reasoning stage alone recovered more accuracy than any of our upstream repair or retrieval work, which is itself a useful finding about where the marginal returns are in a pipeline shaped like this one.
+
+Chain-of-thought prompting (+0.2 points) and few-shot retrieval (+0.0 points) were both fully implemented and evaluated at full scale but did not clear what we found to be a substantial run-to-run noise floor (\S\ref{sec:reproducibility}), and both remain off by default. We report this as a genuine negative result rather than omitting it: two reasonable, fully engineered ideas were tested under the same discipline as our positive result and did not clear the bar for adoption.
+
+The apparent regression from an 82.00\% no-repair run down to the 74.80\% repair-enabled baseline should \emph{not} be read as ``repair hurt.'' As \S\ref{sec:reproducibility} discusses, the no-repair configuration's own results were not stable across repeated runs of the identical configuration key, which is evidence those early numbers are not directly comparable to the later, better-isolated repair-vs.-M6 comparison.
+
+\subsection{Statistical Significance}
+\label{sec:significance}
+
+With $n=500$ dev records, a rough standard error for a single accuracy estimate $p$ is $\sqrt{p(1-p)/n}$; for $p \approx 0.75$--$0.79$ this is roughly $\pm 1.8$--$1.9$ percentage points at one standard error. Treating the repair-only (74.80\%) and M6 (79.00\%) accuracies as two independent proportions gives a combined standard error of roughly $\pm 2.6$ points, placing the observed +4.2-point gap at around 1.6 standard errors --- suggestive, but not the kind of margin that would obviously clear a conventional significance threshold under that approximation.
+
+This is the wrong test to lean on, however: the repair-only and M6 configurations are scored on the same 500 records with the same gold labels, making this a paired comparison rather than two independent samples. The correct and more powerful tool is McNemar's test on the per-record disagreements between the two configurations, which ignores the (presumably large) set of records both configurations already agree on. Running it requires the raw per-record prediction files for both configurations, which we did not have available in time for this submission; we flag this as a concrete, well-scoped next step (\S\ref{sec:limitations}) rather than overstate the current result.
+
+\subsection{A Cache-Versioning Reproducibility Issue}
+\label{sec:reproducibility}
+
+We surface a reproducibility issue directly rather than omitting it. The identical selector configuration key produced accuracy scores that oscillated between roughly 71.6\% and 82.0\% across repeated runs, with no logged variable distinguishing them --- a swing of over ten accuracy points under a nominally unchanged configuration. The most plausible explanation is that our parse-stage cache key did not encode which prompt revision (v1 or v2, \S\ref{sec:parsing}) produced a given cached parse during a mid-development prompt transition, so a configuration string naming only the selector could silently be evaluated against a mix of old- and new-prompt parses. We treat the post-transition 74.80\% figure as the trustworthy repair-enabled baseline and the earlier oscillating values as transition artifacts, though this reading is an inference rather than a certainty we have independently confirmed against the raw parse-cache contents.
+
+We report this as a concrete, generalizable lesson for anyone building a similarly staged, cached pipeline: a cache key must encode every input that can change a model's output, not only the pipeline stage name. It is also the reason our single-run milestone comparisons (\S\ref{sec:interpretation}) should be read with appropriate caution --- a delta smaller than roughly ten points, observed only once, is not distinguishable from this same noise source without repetition.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What worked.} Decomposing the task into independently cacheable stages let us attribute the project's largest gain to a single, precisely isolated change (the selector swap, \S\ref{sec:interpretation}) in a way a monolithic end-to-end model cannot support --- the official baseline's flat 39.8\% offers no way to say which sub-capability is limiting it. Schema-constrained decoding, used everywhere a model output must be machine-read, appears to have eliminated parse-format failures entirely: every failure we observed during development was semantic (a degenerate option, a genuinely ambiguous image) rather than a malformed model response. The caching and fault-tolerance infrastructure (\S\ref{sec:infra}) is not incidental: reaching the production result required at least six full-scale scored iterations, and reusing cached upstream stages when only the selector changed is very plausibly what made that many iterations feasible within the project's timeline.
+
+\paragraph{What we would do differently.} The reproducibility gap in \S\ref{sec:reproducibility} is a real, observed failure mode, not a hypothetical one, and while the likely cause is understood, it has not been independently confirmed fixed against the raw cache contents. Every milestone comparison in this paper is a single run; given that a single configuration swung by roughly ten points once, our repair-only-vs.-M6 comparison (74.80\%$\rightarrow$79.00\%) is suggestive rather than conclusive without either repetition or the paired significance test described in \S\ref{sec:significance}.
+
+\paragraph{Trade-offs.} Serving all models locally via Ollama means no per-call cost, no rate limits, and no audio or image data leaving the machine --- a meaningful advantage for a pipeline processing potentially sensitive audio/image pairs, and a deliberate design commitment rather than a default. The trade-off is that the selector is bounded by what an 8B-parameter local model can do; a larger or hosted frontier model might close some of the remaining gap to a human ceiling, at the cost of the privacy and cost properties this design explicitly optimizes for. Similarly, the three-step repair ladder keeps average cost low by escalating only on flagged records, but this makes total pipeline runtime data-dependent in a way that is harder to predict up front than a fixed-cost design.
+
+\paragraph{Generalization.} The pipeline is built from Protocol-based, swappable backends (ASR, parser, selector) specifically so it can serve as a reusable framework beyond this one shared task. That said, every scored result in this paper is on the \texttt{dev}/MSA split; the \texttt{en} track exists in the data loader for internal comparison only, and we have no scored English-track result. We therefore scope our generalization claim to ``the architecture is designed to support this'' rather than ``this has been demonstrated,'' pending an actual cross-lingual or cross-task evaluation.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Decomposing spoken visual question answering into independently cacheable perception, language-understanding, and reasoning stages let us isolate the effect of individual design choices --- most notably, that upgrading the selector model alone recovered more accuracy than any of our upstream repair or retrieval work. Our production pipeline reaches 79.0\% accuracy on dev/MSA against a 39.8\% official baseline. We report two negative results (chain-of-thought, few-shot retrieval) with the same rigor as our positive one, and surface a cache-versioning bug that we believe generalizes as a lesson beyond this specific submission.
+
+\section*{Limitations}
+\label{sec:limitations}
+
+All results reported here are on the labeled development split; we do not yet have scored results on the blind devtest or test splits, and the 79.0\% figure should be read accordingly. Every milestone comparison in \S\ref{sec:results} is a single run rather than a repeated-run average, and we directly observed a roughly ten-point swing under a nominally identical configuration (\S\ref{sec:reproducibility}); this means our null results for chain-of-thought and few-shot retrieval should be read as ``not distinguishable from no effect given the data available'' rather than as confirmed negative findings. The one clear reproducibility anomaly we identified is explained but not independently confirmed fixed against the raw cache contents. A full per-record error analysis --- separating ASR failures, parsing failures, and genuine visual-reasoning failures --- was not completed in time for this submission. Two of our three ASR backend implementations (Fanar Aura-STT, OpenAI \texttt{gpt-4o-transcribe}) are unit-tested but have never been run against a live service, so all reported results reflect the Whisper backend only. Finally, we did not have the raw per-record prediction files needed to run the paired significance test (\S\ref{sec:significance}) that the repair-only-to-M6 comparison calls for; hardware specifics (GPU model, VRAM) are also not documented here.
+
+\section*{Ethics Statement}
+
+All models used are served locally, so no audio or image data leaves the machine performing inference. We use only the dataset and splits released by the task organizers and report results exclusively on the labeled development split. We are not aware of additional ethical considerations beyond those already addressed by the shared task organizers' own data release process.
+
+\section*{Acknowledgments}
+
+We thank the ImageEval 2026 / ArabicNLP 2026 organizers for releasing the Task 1a benchmark.
+
+\bibliography{references}
+
+\appendix
+
+\section{Output Schemas}
+\label{sec:appendix-schemas}
+
+For reference, the JSON schemas used to constrain the two model-call stages described in \S\ref{sec:parsing} and \S\ref{sec:selector}:
+
+\paragraph{Transcript parsing output.} An object with exactly four required string fields: \texttt{question}, \texttt{option\_0}, \texttt{option\_1}, \texttt{option\_2}.
+
+\paragraph{Answer selection output.} An object with one required field, \texttt{answer\_index}, constrained to the integer enum $\{0, 1, 2\}$.
+
+\end{document}
